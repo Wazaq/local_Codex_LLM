@@ -13,10 +13,14 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: google-github-actions/release-please-action@v4
+      - uses: googleapis/release-please-action@v4
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          command: manifest
+          # Manifest mode is inferred by providing a manifest file
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: main
+          # If your org disallows GitHub Actions from creating branches/PRs,
+          # enable fork mode to open PRs from a fork.
+          fork: true
