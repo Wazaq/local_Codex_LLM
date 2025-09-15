@@ -1,0 +1,118 @@
+from flask import Blueprint, jsonify, Response, current_app
+import time
+
+import config
+
+health_bp = Blueprint('health', __name__)
+
+
+def _check_dependencies(app):
+    metrics = app.config['metrics']
+    ail_client = app.config['ail_client']
+    # MCP
+    mcp_ok = False
+    mcp_tools = 0
+    mcp_rt = None
+    try:
+        t0 = time.time()
+        resp = ail_client.list_tools()
+        mcp_rt = int((time.time() - t0) * 1000)
+        if isinstance(resp, dict) and 'error' not in resp:
+            result = resp.get('result', resp)
+            tools = result.get('tools') if isinstance(result, dict) else None
+            if isinstance(tools, list):
+                mcp_tools = len(tools)
+                mcp_ok = True
+    except Exception:
+        pass
+    # Ollama
+    ollama_ok = False
+    ollama_rt = None
+    import requests
+    try:
+        t0 = time.time()
+        r = requests.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=5)
+        ollama_rt = int((time.time() - t0) * 1000)
+        if r.ok:
+            ollama_ok = True
+    except Exception:
+        pass
+    try:
+        metrics.set_gauge('codex_health_status', {"component": "mcp"}, 1 if mcp_ok else 0)
+        metrics.set_gauge('codex_health_status', {"component": "ollama"}, 1 if ollama_ok else 0)
+    except Exception:
+        pass
+    return mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt
+
+
+@health_bp.route('/health', methods=['GET'])
+def health_check():
+    ail_client = current_app.config['ail_client']
+    return jsonify({"status": "MCP Bridge running", "ail_url": ail_client.mcp_url})
+
+
+@health_bp.route('/health/mcp', methods=['GET'])
+def health_mcp():
+    mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt = _check_dependencies(current_app)
+    model_name = config.MODEL_NAME
+    status = 'healthy' if (mcp_ok and ollama_ok) else ('degraded' if (mcp_ok or ollama_ok) else 'unhealthy')
+    return jsonify({
+        "status": status,
+        "mcp": {"connected": mcp_ok, "tools_available": mcp_tools, "response_time_ms": mcp_rt},
+        "ollama": {"connected": ollama_ok, "model": model_name, "response_time_ms": ollama_rt},
+    })
+
+
+@health_bp.route('/healthz', methods=['GET'])
+def healthz():
+    from core.utils import now_iso
+    return jsonify({"status": "alive", "timestamp": now_iso()})
+
+
+@health_bp.route('/readyz', methods=['GET'])
+def readyz():
+    mcp_ok, _, _, ollama_ok, _ = _check_dependencies(current_app)
+    ready = bool(mcp_ok and ollama_ok)
+    status = 200 if ready else 503
+    from core.utils import now_iso
+    return jsonify({"ready": ready, "timestamp": now_iso()}), status
+
+
+@health_bp.route('/metrics', methods=['GET'])
+def metrics_endpoint():
+    text = current_app.config['metrics'].render_prometheus()
+    return Response(text, mimetype='text/plain; version=0.0.4; charset=utf-8')
+
+
+@health_bp.route('/config', methods=['GET'])
+def get_config():
+    cfg = {
+        "model": config.MODEL_NAME,
+        "num_ctx": config.NUM_CTX,
+        "mcp_tool": config.MCP_SEARCH_TOOL,
+        "log_level": config.LOG_LEVEL,
+        "mcp_retry_attempts": config.MCP_RETRY_ATTEMPTS,
+        "mcp_timeout_seconds": config.MCP_TIMEOUT_SECONDS,
+        "mcp_backoff_base": config.MCP_BACKOFF_BASE,
+        "http_fallback_timeout": config.HTTP_FALLBACK_TIMEOUT,
+        "circuit_breaker_threshold": config.CIRCUIT_BREAKER_THRESHOLD,
+        "circuit_breaker_cooldown": config.CIRCUIT_BREAKER_COOLDOWN,
+        "content_filter_enabled": config.ENABLE_CONTENT_FILTER,
+        "max_requests_per_hour": config.MAX_REQUESTS_PER_HOUR,
+        "allow_list_domains": config.ALLOW_LIST_DOMAINS,
+        "security_log_file": config.SECURITY_LOG_FILE,
+        "shutdown_timeout": config.SHUTDOWN_TIMEOUT,
+        "shutdown_endpoint_enabled": config.ENABLE_SHUTDOWN_ENDPOINT,
+    }
+    issues = []
+    if config.NUM_CTX <= 0:
+        issues.append('NUM_CTX must be positive')
+    if config.MCP_RETRY_ATTEMPTS < 0:
+        issues.append('MCP_RETRY_ATTEMPTS must be >= 0')
+    if config.MCP_TIMEOUT_SECONDS <= 0:
+        issues.append('MCP_TIMEOUT_SECONDS must be > 0')
+    if config.MCP_BACKOFF_BASE <= 0:
+        issues.append('MCP_BACKOFF_BASE must be > 0')
+    if config.SHUTDOWN_TIMEOUT < 0:
+        issues.append('SHUTDOWN_TIMEOUT must be >= 0')
+    return jsonify({"config": cfg, "valid": len(issues) == 0, "issues": issues})

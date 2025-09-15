@@ -1,0 +1,1041 @@
+import requests
+import json
+import os
+import time
+import random
+import threading
+import signal
+import re
+from collections import deque
+import hashlib
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from datetime import datetime, timezone
+from flask import Flask, request, jsonify, Response
+
+class HTTPMCPClient:
+    def __init__(self, mcp_url):
+        self.mcp_url = mcp_url
+
+    def call_mcp_function(self, tool_name, arguments):
+      """Call MCP tool via HTTP POST with retries and circuit breaker"""
+      payload = {
+          "jsonrpc": "2.0",
+          "id": "1",
+          "method": "tools/call",
+          "params": {"name": tool_name, "arguments": arguments}
+      }
+
+      if not _cb_can_call():
+          return {"error": "MCP circuit open"}
+
+      attempts = max(1, MCP_RETRY_ATTEMPTS)
+      for attempt in range(attempts):
+          try:
+              response = requests.post(self.mcp_url, json=payload, timeout=MCP_TIMEOUT_SECONDS)
+              response.raise_for_status()
+              _cb_record_success()
+              return response.json()
+          except requests.exceptions.RequestException as e:
+              _cb_record_failure()
+              if attempt >= attempts - 1:
+                  return {"error": f"MCP call failed: {str(e)}"}
+              backoff = MCP_BACKOFF_BASE * (2 ** attempt)
+              jitter = backoff * random.uniform(0, 0.2)
+              time.sleep(backoff + jitter)
+
+
+def _check_dependencies():
+    """Check MCP and Ollama availability and return status tuple (mcp_ok, mcp_tools, mcp_rt_ms, ollama_ok, ollama_rt_ms)."""
+    # MCP
+    mcp_ok = False
+    mcp_tools = 0
+    mcp_rt = None
+    try:
+        t0 = time.time()
+        resp = ail_client.list_tools()
+        mcp_rt = int((time.time() - t0) * 1000)
+        if isinstance(resp, dict) and 'error' not in resp:
+            result = resp.get('result', resp)
+            tools = result.get('tools') if isinstance(result, dict) else None
+            if isinstance(tools, list):
+                mcp_tools = len(tools)
+                mcp_ok = True
+    except Exception:
+        pass
+
+    # Ollama
+    ollama_ok = False
+    ollama_rt = None
+    try:
+        t0 = time.time()
+        r = requests.get("http://localhost:11434/api/tags", timeout=5)
+        ollama_rt = int((time.time() - t0) * 1000)
+        if r.ok:
+            ollama_ok = True
+    except Exception:
+        pass
+
+    # Update gauges
+    try:
+        metrics.set_gauge('codex_health_status', {"component": "mcp"}, 1 if mcp_ok else 0)
+        metrics.set_gauge('codex_health_status', {"component": "ollama"}, 1 if ollama_ok else 0)
+    except Exception:
+        pass
+
+    return mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt
+
+    def list_tools(self):
+      """List MCP tools via HTTP POST"""
+      payload = {
+          "jsonrpc": "2.0",
+          "id": "1",
+          "method": "tools/list",
+          "params": {}
+      }
+      try:
+          response = requests.post(self.mcp_url, json=payload, timeout=10)
+          response.raise_for_status()
+          return response.json()
+      except requests.exceptions.RequestException as e:
+          return {"error": f"MCP list failed: {str(e)}"}
+
+# Initialize AIL client
+ail_client = HTTPMCPClient("https://neural-nexus-palace.wazaqglim.workers.dev/mcp")
+
+# Flask app for HTTP interface
+app = Flask(__name__)
+
+# Configurables via environment
+MODEL_NAME = os.getenv('CODEX_MODEL', 'qwen2.5-coder:32b')
+NUM_CTX = int(os.getenv('CODEX_CONTEXT', '8192'))
+MCP_SEARCH_TOOL = os.getenv('CODEX_MCP_TOOL_SEARCH', 'brain_ai_library_search')
+LOG_LEVEL = os.getenv('CODEX_LOG_LEVEL', 'INFO').upper()
+MCP_RETRY_ATTEMPTS = int(os.getenv('CODEX_MCP_RETRY_ATTEMPTS', '3'))
+MCP_TIMEOUT_SECONDS = float(os.getenv('CODEX_MCP_TIMEOUT_SECONDS', '10'))
+MCP_BACKOFF_BASE = float(os.getenv('CODEX_MCP_BACKOFF_BASE', '1.0'))
+HTTP_FALLBACK_TIMEOUT = float(os.getenv('CODEX_HTTP_FALLBACK_TIMEOUT', '5'))
+CIRCUIT_BREAKER_THRESHOLD = int(os.getenv('CODEX_CIRCUIT_BREAKER_THRESHOLD', '5'))
+CIRCUIT_BREAKER_COOLDOWN = float(os.getenv('CODEX_CIRCUIT_BREAKER_COOLDOWN_SECONDS', '30'))
+ENABLE_CONTENT_FILTER = os.getenv('CODEX_ENABLE_CONTENT_FILTER', 'false').lower() == 'true'
+MAX_REQUESTS_PER_HOUR = int(os.getenv('CODEX_MAX_REQUESTS_PER_HOUR', '1000'))
+BLOCKED_KEYWORDS_FILE = os.getenv('CODEX_BLOCKED_KEYWORDS_FILE', '')
+ALLOW_LIST_DOMAINS = [d.strip().lower() for d in os.getenv('CODEX_ALLOW_LIST_DOMAINS', 'neural-nexus-palace.wazaqglim.workers.dev').split(',') if d.strip()]
+SECURITY_LOG_FILE = os.getenv('CODEX_SECURITY_LOG_FILE', os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'logs', 'security.log')))
+SHUTDOWN_TIMEOUT = float(os.getenv('CODEX_SHUTDOWN_TIMEOUT', '30'))
+ENABLE_SHUTDOWN_ENDPOINT = os.getenv('CODEX_ENABLE_SHUTDOWN_ENDPOINT', 'false').lower() == 'true'
+
+# Logging setup (rotates daily, keep 7 backups)
+logger = logging.getLogger('codex_bridge')
+if not logger.handlers:
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    logs_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except Exception:
+        logs_dir = os.path.dirname(__file__)
+    log_path = os.path.normpath(os.path.join(logs_dir, 'codex_bridge.log'))
+    handler = TimedRotatingFileHandler(log_path, when='midnight', backupCount=7, encoding='utf-8')
+    formatter = logging.Formatter('%(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+# Security logger
+security_logger = logging.getLogger('codex_security')
+if not security_logger.handlers:
+    try:
+        os.makedirs(os.path.dirname(SECURITY_LOG_FILE), exist_ok=True)
+    except Exception:
+        pass
+    sh = TimedRotatingFileHandler(SECURITY_LOG_FILE, when='midnight', backupCount=14, encoding='utf-8')
+    sh.setFormatter(logging.Formatter('%(message)s'))
+    security_logger.addHandler(sh)
+    security_logger.setLevel(logging.INFO)
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+# Metrics and circuit breaker additions
+import math
+
+class Metrics:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.counters = {}
+        self.histograms = {}
+        self.gauges = {}
+        self.default_buckets = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, float('inf')]
+
+    def _labels_key(self, labels):
+        return tuple(sorted((labels or {}).items()))
+
+    def inc_counter(self, name, labels=None, value=1):
+        with self.lock:
+            key = (name, self._labels_key(labels or {}))
+            self.counters[key] = self.counters.get(key, 0) + value
+
+    def set_gauge(self, name, labels=None, value=0):
+        with self.lock:
+            key = (name, self._labels_key(labels or {}))
+            self.gauges[key] = value
+
+    def inc_gauge(self, name, labels=None, delta=1):
+        with self.lock:
+            key = (name, self._labels_key(labels or {}))
+            self.gauges[key] = self.gauges.get(key, 0) + delta
+
+    def observe_histogram(self, name, value, labels=None, buckets=None):
+        if buckets is None:
+            buckets = self.default_buckets
+        labels_key = self._labels_key(labels or {})
+        with self.lock:
+            h = self.histograms.setdefault(name, {'buckets': buckets, 'counts': {}, 'sum': {}, 'count': {}})
+            counts = h['counts'].setdefault(labels_key, [0] * len(buckets))
+            for i, edge in enumerate(buckets):
+                if value <= edge:
+                    counts[i] += 1
+                    break
+            h['sum'][labels_key] = h['sum'].get(labels_key, 0.0) + float(value)
+            h['count'][labels_key] = h['count'].get(labels_key, 0) + 1
+
+    def render_prometheus(self):
+        lines = []
+        with self.lock:
+            for (name, labels_key), val in self.counters.items():
+                label_str = '' if not labels_key else '{' + ','.join(f'{k}="{v}"' for k, v in labels_key) + '}'
+                lines.append(f"{name}{label_str} {val}")
+            for (name, labels_key), val in self.gauges.items():
+                label_str = '' if not labels_key else '{' + ','.join(f'{k}="{v}"' for k, v in labels_key) + '}'
+                lines.append(f"{name}{label_str} {val}")
+            for name, h in self.histograms.items():
+                buckets = h['buckets']
+                for labels_key, counts in h['counts'].items():
+                    cum = 0
+                    for i, edge in enumerate(buckets):
+                        cum += counts[i]
+                        edge_str = '+Inf' if edge == float('inf') else (('%.3f' % edge).rstrip('0').rstrip('.'))
+                        base_labels = {k: v for k, v in labels_key}
+                        base_labels['le'] = str(edge_str)
+                        label_str = '{' + ','.join(f'{k}="{v}"' for k, v in sorted(base_labels.items())) + '}'
+                        lines.append(f"{name}_bucket{label_str} {cum}")
+                    label_str_base = '' if not labels_key else '{' + ','.join(f'{k}="{v}"' for k, v in labels_key) + '}'
+                    lines.append(f"{name}_sum{label_str_base} {h['sum'].get(labels_key, 0.0)}")
+                    lines.append(f"{name}_count{label_str_base} {h['count'].get(labels_key, 0)}")
+        return "\n".join(lines) + "\n"
+
+metrics = Metrics()
+STREAMING_ACTIVE_NAME = 'codex_streaming_active'
+metrics.set_gauge(STREAMING_ACTIVE_NAME, {}, 0)
+
+# Readiness and shutdown state
+READY = False
+SHUTTING_DOWN = False
+
+_cb_lock = threading.Lock()
+_cb_failures = 0
+_cb_open_until = 0.0
+
+def _cb_record_success():
+    global _cb_failures, _cb_open_until
+    with _cb_lock:
+        _cb_failures = 0
+        _cb_open_until = 0.0
+
+def _cb_can_call():
+    now = time.time()
+    with _cb_lock:
+        return not (now < _cb_open_until)
+
+def _cb_record_failure():
+    global _cb_failures, _cb_open_until
+    with _cb_lock:
+        _cb_failures += 1
+        if _cb_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            _cb_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN
+
+# -----------------------
+# Rate limiting (per IP)
+# -----------------------
+_rate_lock = threading.Lock()
+_rate_buckets = {}  # ip -> deque[timestamps]
+
+def _rate_limit_check(ip: str, limit_per_hour: int) -> bool:
+    if limit_per_hour <= 0:
+        return True
+    now = time.time()
+    hour_ago = now - 3600
+    with _rate_lock:
+        dq = _rate_buckets.get(ip)
+        if dq is None:
+            dq = deque()
+            _rate_buckets[ip] = dq
+        while dq and dq[0] < hour_ago:
+            dq.popleft()
+        if len(dq) >= limit_per_hour:
+            return False
+        dq.append(now)
+        return True
+
+
+# -----------------------
+# Content filtering
+# -----------------------
+_default_blocked_terms = [
+    'ignore previous', 'disregard previous', 'system prompt', 'you are chatgpt',
+    'do anything now', 'jailbreak', 'sudo rm -rf', 'rm -rf /', 'drop database',
+    'disable safety', 'bypass safety', 'prompt injection'
+]
+
+def _load_blocked_terms():
+    terms = list(_default_blocked_terms)
+    try:
+        if BLOCKED_KEYWORDS_FILE and os.path.isfile(BLOCKED_KEYWORDS_FILE):
+            with open(BLOCKED_KEYWORDS_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    s = line.strip()
+                    if s and not s.startswith('#'):
+                        terms.append(s)
+    except Exception:
+        pass
+    # Deduplicate and normalize lower-case
+    seen = set()
+    result = []
+    for t in terms:
+        tl = t.lower()
+        if tl not in seen:
+            seen.add(tl)
+            result.append(tl)
+    return result
+
+BLOCKED_TERMS = _load_blocked_terms()
+
+def _contains_blocked(text: str) -> str:
+    t = (text or '').lower()
+    for term in BLOCKED_TERMS:
+        if term and term in t:
+            return term
+    return ''
+
+_html_re = re.compile(r'<[^>]+>')
+_ctrl_re = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F]')
+
+def _sanitize_text(text: str, max_len: int = 1000) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    text = _ctrl_re.sub('', text)
+    text = _html_re.sub('', text)
+    text = text.replace('\r', ' ').replace('\n', '\n').strip()
+    if len(text) > max_len:
+        text = text[:max_len] + '…'
+    return text
+
+
+def _extract_results_from_mcp(mcp_response):
+    """Normalize MCP tool call responses into a list of result items."""
+    try:
+        if not isinstance(mcp_response, dict):
+            return []
+        if 'error' in mcp_response and mcp_response['error']:
+            return []
+        obj = mcp_response.get('result', mcp_response)
+        # Common shapes: {result: {results: [...]}} or {results: [...]} or {result: [...]}
+        if isinstance(obj, dict) and isinstance(obj.get('results'), list):
+            return obj['results']
+        if isinstance(obj, list):
+            return obj
+        # If it's a dict with content-like fields, wrap it
+        if isinstance(obj, dict) and any(k in obj for k in ('content', 'description', 'text', 'value')):
+            return [obj]
+        return []
+    except Exception:
+        return []
+
+
+def _to_text_list(items):
+    """Extract displayable text lines from list of items."""
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            v = it.get('content') or it.get('description') or it.get('text') or it.get('value') or ''
+            if isinstance(v, (dict, list)):
+                try:
+                    v = json.dumps(v)[:4000]
+                except Exception:
+                    v = str(v)
+            if v:
+                sv = _sanitize_text(v)
+                # Drop items that contain blocked terms when content filter is enabled
+                if ENABLE_CONTENT_FILTER and _contains_blocked(sv):
+                    security_logger.info(json.dumps({
+                        "timestamp": _now_iso(),
+                        "event": "memory_sanitized_drop",
+                        "reason": "blocked_term",
+                        "sample": sv[:120]
+                    }))
+                    metrics.inc_counter('codex_sanitized_items_total', {"type": "memory"})
+                else:
+                    out.append(sv)
+        else:
+            sv = _sanitize_text(it)
+            if ENABLE_CONTENT_FILTER and _contains_blocked(sv):
+                security_logger.info(json.dumps({
+                    "timestamp": _now_iso(),
+                    "event": "memory_sanitized_drop",
+                    "reason": "blocked_term",
+                    "sample": sv[:120]
+                }))
+                metrics.inc_counter('codex_sanitized_items_total', {"type": "memory"})
+            else:
+                out.append(sv)
+    return [s for s in out if s]
+
+
+def _http_ail_search(query, domain=None, limit=5, timeout=10):
+    url = "https://neural-nexus-palace.wazaqglim.workers.dev/mobile/brain-ai-library-search"
+    params = {"q": query, "limit": limit}
+    if domain:
+        params["domain"] = domain
+    # Allow-list enforcement on host
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        if host not in ALLOW_LIST_DOMAINS and ENABLE_CONTENT_FILTER:
+            security_logger.info(json.dumps({
+                "timestamp": _now_iso(),
+                "event": "http_blocked_host",
+                "host": host
+            }))
+            metrics.inc_counter('codex_security_block_total', {"reason": "host_not_allowlisted"})
+            return {"results": []}
+    except Exception:
+        pass
+
+    attempts = max(1, MCP_RETRY_ATTEMPTS)
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.ok:
+                return resp.json()
+        except Exception:
+            pass
+        if attempt >= attempts - 1:
+            break
+        backoff = MCP_BACKOFF_BASE * (2 ** attempt)
+        jitter = backoff * random.uniform(0, 0.2)
+        time.sleep(backoff + jitter)
+    return {"results": []}
+
+@app.route('/get-codex-personality', methods=['POST'])
+def get_codex_personality():
+    """Load Codex personality from AIL via HTTP"""
+    url = "https://neural-nexus-palace.wazaqglim.workers.dev/mobile/brain-ai-library-search"
+    params = {
+        "q": "experimental",
+        "domain": "Codex Personality Room",
+        "limit": 10
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return jsonify(response.json())
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"HTTP call failed: {str(e)}"})
+
+@app.route('/get-memories', methods=['POST'])
+def get_memories():
+    """Load recent partnership memories via HTTP"""
+    url = "https://neural-nexus-palace.wazaqglim.workers.dev/mobile/brain-ai-library-search"
+    params = {
+        "q": "Claude",
+        "limit": 10
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return jsonify(response.json())
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"HTTP call failed: {str(e)}"})
+
+@app.route('/chat-with-codex', methods=['POST'])
+def chat_with_codex():
+    """Full conversation flow: Load personality + memories, chat with Codex"""
+    data = request.json
+    user_message = data.get('message', '')
+    include_debug = bool(data.get('debug', False))
+    # Request-tunable generation options
+    temperature = data.get('temperature', 0.7)
+    top_p = data.get('top_p', 0.9)
+    seed = data.get('seed', None)
+
+    t_start = time.time()
+    metrics.inc_counter('codex_requests_total', {"endpoint": "/chat-with-codex", "method": "POST"})
+
+    # Rate limiting (per IP)
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+    if not _rate_limit_check(ip, MAX_REQUESTS_PER_HOUR):
+        security_logger.info(json.dumps({
+            "timestamp": _now_iso(),
+            "event": "rate_limit_block",
+            "ip": ip
+        }))
+        metrics.inc_counter('codex_rate_limit_block_total', {"endpoint": "/chat-with-codex"})
+        return jsonify({"error": "Rate limit exceeded. Please try again later."}), 429
+
+    # Content filter for inbound user message
+    if ENABLE_CONTENT_FILTER:
+        term = _contains_blocked(user_message)
+        if term:
+            security_logger.info(json.dumps({
+                "timestamp": _now_iso(),
+                "event": "content_blocked",
+                "ip": ip,
+                "reason": "blocked_term",
+                "term": term
+            }))
+            metrics.inc_counter('codex_security_block_total', {"reason": "blocked_term"})
+            return jsonify({"error": "Message blocked by content policy."}), 400
+
+    # 1. Load Codex personality via MCP (fallback to HTTP)
+    personality_args = {"q": "experimental", "domain": "Codex Personality Room", "limit": 5}
+    if include_debug:
+        try:
+            print("[MCP] Calling", MCP_SEARCH_TOOL, "with", personality_args)
+        except Exception:
+            pass
+    mcp_t0 = time.time()
+    personality_mcp = ail_client.call_mcp_function(MCP_SEARCH_TOOL, personality_args)
+    personality_items = _extract_results_from_mcp(personality_mcp)
+    if not personality_items:
+        # Fallback to HTTP search if MCP returns nothing
+        personality_http = _http_ail_search("experimental", domain="Codex Personality Room", limit=5)
+        personality_items = personality_http.get('results', [])
+
+    # 2. Load relevant memories via MCP (fallback to HTTP)
+    memory_args = {"q": f"partnership collaboration {user_message}", "limit": 5}
+    if include_debug:
+        try:
+            print("[MCP] Calling", MCP_SEARCH_TOOL, "with", memory_args)
+        except Exception:
+            pass
+    memory_mcp = ail_client.call_mcp_function(MCP_SEARCH_TOOL, memory_args)
+    memory_items = _extract_results_from_mcp(memory_mcp)
+    if not memory_items:
+        memory_http = _http_ail_search(f"partnership collaboration {user_message}", limit=5)
+        memory_items = memory_http.get('results', [])
+    mcp_t1 = time.time()
+
+    # 3. Build context for Codex (as a system message)
+    personality_lines = _to_text_list(personality_items)
+    memory_lines = _to_text_list(memory_items)
+
+    # Fallback messages to avoid empty sections
+    if not personality_lines:
+        personality_lines = ["No personality traits loaded - using base model responses"]
+    if not memory_lines:
+        memory_lines = ["No relevant memories found for this conversation"]
+
+    system_prompt = (
+        "You are Codex, a helpful AI with a distinct personality.\n"
+        "Use the provided personality traits and recent memories as context when responding.\n"
+        "If memories are not relevant, prioritize the user's message. Be concise and concrete.\n\n"
+        f"PERSONALITY:\n- " + "\n- ".join(personality_lines) +
+        ("\n\nRECENT MEMORIES:\n- " + "\n- ".join(memory_lines) if memory_lines else "")
+    )
+
+    # 4. Send to Ollama chat API (role-based messages)
+    ollama_chat_payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        "stream": False,
+        "options": {
+            "num_ctx": NUM_CTX,
+            "temperature": temperature,
+            "top_p": top_p,
+            **({"seed": seed} if seed is not None else {})
+        }
+    }
+
+    try:
+        # Optional: print to server logs for inspection
+        if include_debug:
+            try:
+                print("---- OLLAMA CHAT PAYLOAD ----")
+                print(json.dumps(ollama_chat_payload)[:2000])
+            except Exception:
+                pass
+
+        ollama_t0 = time.time()
+        ollama_response = requests.post(
+            "http://localhost:11434/api/chat",
+            json=ollama_chat_payload,
+            timeout=60
+        )
+        ollama_response.raise_for_status()
+        ollama_data = ollama_response.json()
+        ollama_t1 = time.time()
+
+        # Ollama chat response schema: { message: { role, content }, ... }
+        content = ""
+        if isinstance(ollama_data, dict):
+            # Non-streaming returns a single message
+            content = ollama_data.get("message", {}).get("content", "") or ollama_data.get("response", "")
+
+        result = {
+            "response": content,
+            "personality_loaded": len(personality_items),
+            "memories_loaded": len(memory_items)
+        }
+
+        if include_debug:
+            result["debug_context_system"] = system_prompt
+            result["debug_user_message"] = user_message
+
+        # Observability log entry (hashes, latencies)
+        try:
+            req_hash_src = json.dumps({
+                "model": MODEL_NAME,
+                "system_len": len(system_prompt),
+                "user_len": len(user_message)
+            }, sort_keys=True)
+            req_hash = hashlib.sha256(req_hash_src.encode('utf-8')).hexdigest()[:16]
+            resp_hash = hashlib.sha256((content or "").encode('utf-8')).hexdigest()[:16]
+            log_entry = {
+                "timestamp": _now_iso(),
+                "request_hash": req_hash,
+                "response_hash": resp_hash,
+                "mcp_latency_ms": int((mcp_t1 - mcp_t0) * 1000),
+                "ollama_latency_ms": int((ollama_t1 - ollama_t0) * 1000),
+                "total_latency_ms": int((time.time() - t_start) * 1000),
+                "personality_traits": len(personality_lines),
+                "memories_loaded": len(memory_lines)
+            }
+            logger.info(json.dumps(log_entry))
+        except Exception:
+            pass
+
+        # Metrics: durations and loads
+        total_dur = time.time() - t_start
+        metrics.observe_histogram('codex_request_duration_seconds', total_dur, {"endpoint": "/chat-with-codex"})
+        metrics.observe_histogram('codex_mcp_duration_seconds', max(0.0, (mcp_t1 - mcp_t0)), {"endpoint": "/chat-with-codex"})
+        metrics.observe_histogram('codex_ollama_duration_seconds', max(0.0, (ollama_t1 - ollama_t0)), {"endpoint": "/chat-with-codex"})
+        metrics.inc_counter('codex_personality_load_total', {"status": "success" if personality_items else "fallback"})
+        metrics.inc_counter('codex_memory_load_total', {"status": "success" if memory_items else "fallback"})
+
+        return jsonify(result)
+
+    except requests.exceptions.RequestException as e:
+        metrics.inc_counter('codex_request_errors_total', {"endpoint": "/chat-with-codex"})
+        total_dur = time.time() - t_start
+        metrics.observe_histogram('codex_request_duration_seconds', total_dur, {"endpoint": "/chat-with-codex"})
+        return jsonify({"error": f"Ollama connection failed: {str(e)}"})
+
+@app.route('/ail-search', methods=['POST'])
+def ail_search():
+    """Dynamic AIL search - Codex can search for anything"""
+    data = request.json
+    search_query = data.get('query', '')
+    domain_filter = data.get('domain', None)  # Optional domain filter
+    limit = data.get('limit', 10)
+    
+    if not search_query:
+        return jsonify({"error": "Query parameter required"})
+    
+    url = "https://neural-nexus-palace.wazaqglim.workers.dev/mobile/brain-ai-library-search"
+    params = {
+        "q": search_query,
+        "limit": limit
+    }
+    
+    # Add domain filter if specified
+    if domain_filter:
+        params["domain"] = domain_filter
+    
+    metrics.inc_counter('codex_requests_total', {"endpoint": "/ail-search", "method": "POST"})
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        return jsonify({
+            "query": search_query,
+            "domain": domain_filter or "all",
+            "results": result.get('results', []),
+            "total_found": result.get('total_results', 0),
+            "search_tip": "Use literal terms that exist in content. Try: 'Claude', 'experimental', 'development', 'project'"
+        })
+        
+    except requests.exceptions.RequestException as e:
+        metrics.inc_counter('codex_request_errors_total', {"endpoint": "/ail-search"})
+        return jsonify({"error": f"AIL search failed: {str(e)}"})
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Basic health check endpoint"""
+    return jsonify({"status": "MCP Bridge running", "ail_url": ail_client.mcp_url})
+
+@app.route('/health/mcp', methods=['GET'])
+def health_mcp():
+    """Validate MCP connectivity and Ollama availability."""
+    mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt = _check_dependencies()
+    model_name = MODEL_NAME
+    status = 'healthy' if (mcp_ok and ollama_ok) else ('degraded' if (mcp_ok or ollama_ok) else 'unhealthy')
+    return jsonify({
+        "status": status,
+        "mcp": {"connected": mcp_ok, "tools_available": mcp_tools, "response_time_ms": mcp_rt},
+        "ollama": {"connected": ollama_ok, "model": model_name, "response_time_ms": ollama_rt},
+        "timestamp": _now_iso()
+    })
+
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    return jsonify({"status": "alive", "timestamp": _now_iso()})
+
+@app.route('/readyz', methods=['GET'])
+def readyz():
+    mcp_ok, _, _, ollama_ok, _ = _check_dependencies()
+    ready = bool(mcp_ok and ollama_ok)
+    status = 200 if ready else 503
+    return jsonify({"ready": ready, "timestamp": _now_iso()}), status
+
+@app.route('/chat-with-codex/stream', methods=['POST'])
+def chat_with_codex_stream():
+    """SSE streaming variant of chat-with-codex."""
+    data = request.json or {}
+    user_message = data.get('message', '')
+    include_debug = bool(data.get('debug', False))
+    temperature = data.get('temperature', 0.7)
+    top_p = data.get('top_p', 0.9)
+    seed = data.get('seed', None)
+
+    # Rate limiting (per IP) for streaming
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+    if not _rate_limit_check(ip, MAX_REQUESTS_PER_HOUR):
+        def denied():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Rate limit exceeded'})}\n\n"
+        return Response(denied(), headers={'Content-Type': 'text/event-stream'})
+
+    if ENABLE_CONTENT_FILTER:
+        term = _contains_blocked(user_message)
+        if term:
+            def blocked():
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Message blocked by content policy'})}\n\n"
+            return Response(blocked(), headers={'Content-Type': 'text/event-stream'})
+
+    personality_args = {"q": "experimental", "domain": "Codex Personality Room", "limit": 5}
+    memory_args = {"q": f"partnership collaboration {user_message}", "limit": 5}
+
+    personality_items = _extract_results_from_mcp(ail_client.call_mcp_function(MCP_SEARCH_TOOL, personality_args))
+    if not personality_items:
+        personality_items = _http_ail_search("experimental", domain="Codex Personality Room", limit=5).get('results', [])
+
+    memory_items = _extract_results_from_mcp(ail_client.call_mcp_function(MCP_SEARCH_TOOL, memory_args))
+    if not memory_items:
+        memory_items = _http_ail_search(f"partnership collaboration {user_message}", limit=5).get('results', [])
+
+    personality_lines = _to_text_list(personality_items) or ["No personality traits loaded - using base model responses"]
+    memory_lines = _to_text_list(memory_items) or ["No relevant memories found for this conversation"]
+
+    system_prompt = (
+        "You are Codex, a helpful AI with a distinct personality.\n"
+        "Use the provided personality traits and recent memories as context when responding.\n"
+        "If memories are not relevant, prioritize the user's message. Be concise and concrete.\n\n"
+        f"PERSONALITY:\n- " + "\n- ".join(personality_lines) +
+        ("\n\nRECENT MEMORIES:\n- " + "\n- ".join(memory_lines) if memory_lines else "")
+    )
+
+    chat_payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        "stream": True,
+        "options": {
+            "num_ctx": NUM_CTX,
+            "temperature": temperature,
+            "top_p": top_p,
+            **({"seed": seed} if seed is not None else {})
+        }
+    }
+
+    def event_stream():
+        metrics.inc_gauge(STREAMING_ACTIVE_NAME, {}, 1)
+        yield f"data: {json.dumps({'type': 'personality', 'status': 'loaded', 'count': len(personality_lines)})}\n\n"
+        yield f"data: {json.dumps({'type': 'memory', 'status': 'loaded', 'count': len(memory_lines)})}\n\n"
+        yield f"data: {json.dumps({'type': 'response_start', 'model': MODEL_NAME})}\n\n"
+        try:
+            with requests.post("http://localhost:11434/api/chat", json=chat_payload, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(chunk, dict):
+                        msg = chunk.get('message', {})
+                        if isinstance(msg, dict):
+                            content = msg.get('content')
+                            if content:
+                                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                        if chunk.get('done') is True:
+                            break
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            metrics.inc_gauge(STREAMING_ACTIVE_NAME, {}, -1)
+            yield f"data: {json.dumps({'type': 'response_end'})}\n\n"
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'Content-Type': 'text/event-stream',
+        'Connection': 'keep-alive'
+    }
+    return Response(event_stream(), headers=headers)
+
+@app.route('/mcp', methods=['POST'])
+def mcp_http_server():
+    """Expose a minimal MCP HTTP interface with tools/list and tools/call."""
+    req = request.json or {}
+    method = req.get('method')
+    req_id = req.get('id')
+    if method == 'tools/list':
+        tools = [
+            {
+                "name": "codex_chat",
+                "description": "Chat with Codex AI using her experimental personality",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "temperature": {"type": "number", "default": 0.7},
+                        "top_p": {"type": "number", "default": 0.9},
+                        "seed": {"type": ["integer", "null"], "default": None},
+                        "debug": {"type": "boolean", "default": False}
+                    },
+                    "required": ["message"]
+                }
+            },
+            {
+                "name": "codex_chat_with_context",
+                "description": "Chat with Codex using custom personality/memory context overrides",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "personality": {"type": ["array", "string"], "default": []},
+                        "memories": {"type": ["array", "string"], "default": []},
+                        "temperature": {"type": "number", "default": 0.7},
+                        "top_p": {"type": "number", "default": 0.9},
+                        "seed": {"type": ["integer", "null"], "default": None},
+                        "debug": {"type": "boolean", "default": False}
+                    },
+                    "required": ["message"]
+                }
+            },
+            {
+                "name": "codex_search_ail",
+                "description": "Search AI Library via Codex bridge",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "domain": {"type": ["string", "null"], "default": None},
+                        "limit": {"type": "integer", "default": 10}
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}})
+    elif method == 'tools/call':
+        params = req.get('params', {})
+        name = params.get('name')
+        args = params.get('arguments', {})
+        if name == 'codex_chat':
+            payload = {
+                "message": args.get('message', ''),
+                "temperature": args.get('temperature', 0.7),
+                "top_p": args.get('top_p', 0.9),
+                "seed": args.get('seed', None),
+                "debug": args.get('debug', False)
+            }
+            with app.test_request_context(json=payload):
+                res = chat_with_codex()
+                return jsonify({"jsonrpc": "2.0", "id": req_id, "result": json.loads(res.get_data(as_text=True))})
+        elif name == 'codex_chat_with_context':
+            message = args.get('message', '')
+            personality = args.get('personality', [])
+            memories = args.get('memories', [])
+            if isinstance(personality, str):
+                personality = [personality]
+            if isinstance(memories, str):
+                memories = [memories]
+            personality_lines = _to_text_list(personality) or ["No personality traits loaded - using base model responses"]
+            memory_lines = _to_text_list(memories) or ["No relevant memories found for this conversation"]
+
+            system_prompt = (
+                "You are Codex, a helpful AI with a distinct personality.\n"
+                "Use the provided personality traits and recent memories as context when responding.\n"
+                "If memories are not relevant, prioritize the user's message. Be concise and concrete.\n\n"
+                f"PERSONALITY:\n- " + "\n- ".join(personality_lines) +
+                ("\n\nRECENT MEMORIES:\n- " + "\n- ".join(memory_lines) if memory_lines else "")
+            )
+
+            chat_payload = {
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                "stream": False,
+                "options": {
+                    "num_ctx": NUM_CTX,
+                    "temperature": args.get('temperature', 0.7),
+                    "top_p": args.get('top_p', 0.9),
+                    **({"seed": args.get('seed')} if args.get('seed') is not None else {})
+                }
+            }
+            r = requests.post("http://localhost:11434/api/chat", json=chat_payload, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            content = data.get('message', {}).get('content') or data.get('response', '')
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"response": content}})
+        elif name == 'codex_search_ail':
+            q = args.get('query', '')
+            domain = args.get('domain')
+            limit = args.get('limit', 10)
+            result = _http_ail_search(q, domain=domain, limit=limit)
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": result})
+        else:
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"message": f"Unknown tool: {name}"}})
+    else:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"message": "Unsupported method"}})
+
+@app.route('/metrics', methods=['GET'])
+def metrics_endpoint():
+    """Prometheus-compatible metrics endpoint"""
+    text = metrics.render_prometheus()
+    return Response(text, mimetype='text/plain; version=0.0.4; charset=utf-8')
+
+
+# -----------------------
+# Config validation, readiness, shutdown
+# -----------------------
+def _validate_config():
+    issues = []
+    if NUM_CTX <= 0:
+        issues.append('NUM_CTX must be positive')
+    if MCP_RETRY_ATTEMPTS < 0:
+        issues.append('MCP_RETRY_ATTEMPTS must be >= 0')
+    if MCP_TIMEOUT_SECONDS <= 0:
+        issues.append('MCP_TIMEOUT_SECONDS must be > 0')
+    if MCP_BACKOFF_BASE <= 0:
+        issues.append('MCP_BACKOFF_BASE must be > 0')
+    if SHUTDOWN_TIMEOUT < 0:
+        issues.append('SHUTDOWN_TIMEOUT must be >= 0')
+    return issues
+
+
+@app.before_request
+def _gate_shutting_down():
+    global SHUTTING_DOWN
+    if SHUTTING_DOWN:
+        # Allow health and metrics endpoints during shutdown
+        path = request.path or ''
+        if path.startswith('/health') or path.startswith('/metrics'):
+            return None
+        return jsonify({"error": "Server shutting down"}), 503
+
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    cfg = {
+        "model": MODEL_NAME,
+        "num_ctx": NUM_CTX,
+        "mcp_tool": MCP_SEARCH_TOOL,
+        "log_level": LOG_LEVEL,
+        "mcp_retry_attempts": MCP_RETRY_ATTEMPTS,
+        "mcp_timeout_seconds": MCP_TIMEOUT_SECONDS,
+        "mcp_backoff_base": MCP_BACKOFF_BASE,
+        "http_fallback_timeout": HTTP_FALLBACK_TIMEOUT,
+        "circuit_breaker_threshold": CIRCUIT_BREAKER_THRESHOLD,
+        "circuit_breaker_cooldown": CIRCUIT_BREAKER_COOLDOWN,
+        "content_filter_enabled": ENABLE_CONTENT_FILTER,
+        "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
+        "allow_list_domains": ALLOW_LIST_DOMAINS,
+        "security_log_file": SECURITY_LOG_FILE,
+        "shutdown_timeout": SHUTDOWN_TIMEOUT,
+        "shutdown_endpoint_enabled": ENABLE_SHUTDOWN_ENDPOINT,
+    }
+    issues = _validate_config()
+    return jsonify({"config": cfg, "valid": len(issues) == 0, "issues": issues})
+
+
+def _handle_sigterm(signum, frame):
+    # Set shutdown flag and exit after draining
+    import threading as _t
+    import os as _os
+    global SHUTTING_DOWN
+    SHUTTING_DOWN = True
+    def _exit_later():
+        time.sleep(SHUTDOWN_TIMEOUT)
+        _os._exit(0)
+    _t.Thread(target=_exit_later, daemon=True).start()
+
+
+if ENABLE_SHUTDOWN_ENDPOINT:
+    @app.route('/shutdown', methods=['POST'])
+    def shutdown_now():
+        _handle_sigterm(None, None)
+        return jsonify({"status": "shutting_down", "timeout": SHUTDOWN_TIMEOUT})
+
+if __name__ == '__main__':
+    print("🚀 Starting Codex MCP Bridge...")
+    print("🧠 AIL Connection: https://neural-nexus-palace.wazaqglim.workers.dev/mcp")
+    print("🤖 Ollama Connection: http://localhost:11434")
+
+    # Validate config and initial dependencies
+    issues = _validate_config()
+    if issues:
+        print("⚠️ Config issues:", "; ".join(issues))
+    mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt = _check_dependencies()
+    READY = bool(mcp_ok and ollama_ok)
+    print(f"✅ Readiness: {READY} (MCP={mcp_ok} tools={mcp_tools} {mcp_rt}ms, Ollama={ollama_ok} {ollama_rt}ms)")
+
+    # Optional resource monitoring (psutil)
+    try:
+        import psutil
+        proc = psutil.Process()
+        def _resource_monitor():
+            while True:
+                try:
+                    rss = proc.memory_info().rss
+                    cpu = proc.cpu_percent(interval=1.0)
+                    metrics.set_gauge('process_resident_memory_bytes', {}, rss)
+                    metrics.set_gauge('process_cpu_percent', {}, cpu)
+                except Exception:
+                    time.sleep(5)
+                time.sleep(5)
+        threading.Thread(target=_resource_monitor, daemon=True).start()
+        print("🩺 Resource monitor enabled (psutil)")
+    except Exception:
+        print("ℹ️ psutil not available; resource monitor disabled")
+
+    # Register graceful shutdown
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        signal.signal(signal.SIGINT, _handle_sigterm)
+    except Exception:
+        pass
+
+    print("🌐 Bridge running on: http://localhost:8080")
+    app.run(host='0.0.0.0', port=8080, debug=True)
+    
