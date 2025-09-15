@@ -19,3 +19,7 @@ Local LLM I named codex, I had this named before OpenAI created theirs, this is 
 
 - `rsync -av . user@server:~/codex-ai/`
 - `ssh user@server "cd ~/codex-ai && chmod +x run.sh && ./run.sh"`
+
+### Changelog
+
+See `CHANGELOG.md` for release notes and version history.
