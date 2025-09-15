@@ -30,6 +30,7 @@
       <button id="loadBtn">Load</button>
       <button id="newBtn">New</button>
       <button id="refreshBtn">Refresh</button>
+      <button id="copyIdBtn" title="Copy current session ID">Copy SysID</button>
       <span id="stats"></span>
     </header>
     <div id="chat"></div>
@@ -128,6 +129,25 @@
       document.getElementById('loadBtn').onclick = loadSelected;
       document.getElementById('newBtn').onclick = createNew;
       document.getElementById('refreshBtn').onclick = async () => { await listSessions(); await loadSelected(); };
+      document.getElementById('copyIdBtn').onclick = async () => {
+        const btn = document.getElementById('copyIdBtn');
+        if (!current) { btn.textContent = 'No Session'; setTimeout(()=>btn.textContent='Copy SysID', 1000); return; }
+        const text = current;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.focus(); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+          }
+          btn.textContent = 'Copied'; setTimeout(()=>btn.textContent='Copy SysID', 1200);
+        } catch (e) {
+          console.error('Copy failed', e);
+          btn.textContent = 'Copy Failed'; setTimeout(()=>btn.textContent='Copy SysID', 1400);
+        }
+      };
 
       limitRange.addEventListener('input', () => {
         viewLimit = parseInt(limitRange.value, 10) || 100;
