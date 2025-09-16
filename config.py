@@ -40,8 +40,9 @@ SESSION_TOKEN_LIMIT = int(os.getenv('CODEX_SESSION_TOKEN_LIMIT', os.getenv('SESS
 SESSION_TTL_SECONDS = int(os.getenv('CODEX_SESSION_TTL_SECONDS', os.getenv('SESSION_TTL_SECONDS', '0')))
 SESSION_BACKEND = os.getenv('CODEX_SESSION_BACKEND', os.getenv('SESSION_BACKEND', 'memory')).lower()
 REDIS_URL = os.getenv('CODEX_REDIS_URL', os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+SESSION_STORAGE_PATH = os.getenv('CODEX_SESSION_STORAGE_PATH', os.getenv('SESSION_STORAGE_PATH', 'data/sessions.json'))
+SESSION_TTL_DAYS = int(os.getenv('CODEX_SESSION_TTL_DAYS', os.getenv('SESSION_TTL_DAYS', '0')))
 BRIDGE_AI_ID = os.getenv('CODEX_BRIDGE_AI_ID', os.getenv('BRIDGE_AI_ID', 'codex'))
 
 # Ollama URL is fixed in monolith to localhost
 OLLAMA_BASE_URL = os.getenv('OLLAMA_URL', os.getenv('CODEX_OLLAMA_URL', 'http://localhost:11434'))
-

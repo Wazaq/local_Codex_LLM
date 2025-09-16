@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, Response, current_app
 import time
+import os
 
 import config
 
@@ -48,7 +49,34 @@ def _check_dependencies(app):
 @health_bp.route('/health', methods=['GET'])
 def health_check():
     ail_client = current_app.config['ail_client']
-    return jsonify({"status": "MCP Bridge running", "ail_url": ail_client.mcp_url})
+    sessions = current_app.config.get('sessions')
+    count, _ = (sessions.snapshot_stats() if sessions else (0, 0))
+    # Detect actual backend from the store instance, not just config
+    detected_backend = 'memory'
+    storage_info = {"backend": detected_backend, "accessible": True}
+    try:
+        if sessions is not None:
+            cls = type(sessions).__name__.lower()
+            if 'file' in cls:
+                detected_backend = 'file'
+                path = getattr(sessions, '_path', getattr(config, 'SESSION_STORAGE_PATH', 'data/sessions.json'))
+                d = os.path.dirname(path) or '.'
+                ok = os.access(d, os.R_OK | os.W_OK)
+                storage_info.update({"backend": detected_backend, "path": path, "accessible": bool(ok)})
+            elif 'redis' in cls:
+                detected_backend = 'redis'
+                storage_info.update({"backend": detected_backend})
+            else:
+                # memory or unknown custom
+                _ = sessions.list_ids()
+                storage_info.update({"backend": detected_backend, "accessible": True})
+    except Exception:
+        storage_info["accessible"] = False
+    return jsonify({
+        "status": "MCP Bridge running",
+        "ail_url": ail_client.mcp_url,
+        "sessions": {"count": count, **storage_info}
+    })
 
 
 @health_bp.route('/health/mcp', methods=['GET'])

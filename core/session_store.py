@@ -1,4 +1,6 @@
 import time
+import os
+import logging
 import uuid
 import json
 import threading
@@ -126,7 +128,93 @@ def compact_session_if_needed(sess: Session, metrics: PrometheusMetrics):
         metrics.inc_counter('codex_sessions_compactions_total', {})
 
 
+ 
+
+
+class FileSessionStore:
+    def __init__(self, path: str):
+        self._lock = threading.Lock()
+        self._sessions: Dict[str, Session] = {}
+        self._path = path
+        self._ensure_dir()
+        self._load_from_disk()
+
+    def _ensure_dir(self):
+        try:
+            d = os.path.dirname(self._path) or '.'
+            os.makedirs(d, exist_ok=True)
+        except Exception as e:
+            logging.error(f"Session store: failed to ensure directory: {e}")
+
+    def _load_from_disk(self):
+        try:
+            if os.path.exists(self._path):
+                with open(self._path, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                # support either {id: obj} or {"sessions": {id: obj}}
+                data = raw.get('sessions') if isinstance(raw, dict) and 'sessions' in raw else raw
+                if isinstance(data, dict):
+                    for sid, obj in data.items():
+                        try:
+                            s = Session.from_json(obj)
+                            # prefer key sid if present
+                            s.id = sid or s.id
+                            self._sessions[s.id] = s
+                        except Exception:
+                            continue
+        except Exception as e:
+            logging.error(f"Session store: failed to load sessions: {e}")
+
+    def _flush(self):
+        try:
+            obj = {sid: s.to_json() for sid, s in self._sessions.items()}
+            with open(self._path, 'w', encoding='utf-8') as f:
+                json.dump(obj, f, indent=2)
+        except Exception as e:
+            logging.error(f"Session store: failed to persist sessions: {e}")
+
+    def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None):
+        s = Session(ai_ids=ai_ids, max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT, ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS)
+        with self._lock:
+            self._sessions[s.id] = s
+            self._flush()
+        return s
+
+    def get(self, session_id):
+        with self._lock:
+            return self._sessions.get(session_id)
+
+    def delete(self, session_id):
+        with self._lock:
+            existed = self._sessions.pop(session_id, None) is not None
+            if existed:
+                self._flush()
+            return existed
+
+    def list_ids(self):
+        with self._lock:
+            return list(self._sessions.keys())
+
+    def snapshot_stats(self):
+        with self._lock:
+            n = len(self._sessions)
+            tok = sum((s.token_usage for s in self._sessions.values()), 0)
+        return n, tok
+
+    def save(self, session: 'Session') -> None:
+        with self._lock:
+            self._sessions[session.id] = session
+            self._flush()
+
+
 def make_session_store():
+    # Prefer explicit backends; if file configured, use file-backed store
+    if config.SESSION_BACKEND in ('file', 'json', 'filesystem'):
+        try:
+            return FileSessionStore(config.SESSION_STORAGE_PATH)
+        except Exception:
+            pass
+    # Redis (existing logic) or fallback to in-memory
     if config.SESSION_BACKEND == 'redis':
         try:
             import redis  # type: ignore
@@ -190,4 +278,3 @@ def make_session_store():
             # Fallback to in-memory
             pass
     return SessionStore()
-

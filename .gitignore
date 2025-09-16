@@ -50,9 +50,10 @@ Thumbs.db
 
 # Logs
 logs/
+plans/
+data/
 
 # Local config overrides (optional)
 *.local.json
 *.env
 .env.*
-
