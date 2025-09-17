@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from flask import Flask
 
 from .config import MCP_CONFIG
+from core.errors import CodexError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +196,26 @@ class CodexMCPServer:
             }
 
     async def send_message_to_ai(self, speaker_name: str, message: str, session_id: str, stream: bool = False) -> Dict[str, Any]:
+        sessions_store = self.app.config.get("sessions")
+        error_code_map = {
+            ErrorCode.SESSION_NOT_FOUND: -32004,
+            ErrorCode.AI_RATE_LIMITED: -32005,
+            ErrorCode.AI_UNREACHABLE: -32010,
+            ErrorCode.MCP_ERROR: -32020,
+        }
+
         try:
+            if sessions_store is not None:
+                session = sessions_store.get(session_id)
+                if session is None:
+                    raise CodexError(
+                        ErrorCode.SESSION_NOT_FOUND,
+                        f"Session '{session_id}' not found",
+                        {"session_id": session_id},
+                        "Create a new session before sending messages.",
+                        status_code=404,
+                    )
+
             with self.app.test_client() as client:
                 endpoint = "/chat-with-codex/stream" if stream else "/chat-with-codex"
                 response = client.post(
@@ -203,27 +223,50 @@ class CodexMCPServer:
                     json={"message": message, "session_id": session_id, "speaker_name": speaker_name},
                     headers={"X-AI-Id": speaker_name},
                 )
+
+                if response.status_code != 200:
+                    if stream:
+                        payload: Any = response.get_data(as_text=True)
+                    else:
+                        payload = response.get_json(silent=True)
+                    raise CodexError(
+                        ErrorCode.AI_UNREACHABLE,
+                        "AI communication failed",
+                        {
+                            "status_code": response.status_code,
+                            "endpoint": endpoint,
+                            "response": payload,
+                        },
+                        "Check AI service status and try again.",
+                        status_code=response.status_code,
+                    )
+
                 if stream:
-                    payload: Any = response.get_data(as_text=True)
+                    payload = response.get_data(as_text=True)
                 else:
                     payload = response.get_json(silent=True)
-                if response.status_code != 200:
-                    raise MCPError(
-                        f"AI communication failed: {response.status_code}",
-                        code=-32010,
-                        data={"status_code": response.status_code, "body": payload},
-                    )
+
                 return {
                     "success": True,
                     "speaker_name": speaker_name,
                     "status_code": response.status_code,
                     "response": payload,
                 }
+
+        except CodexError as exc:
+            rpc_code = error_code_map.get(exc.code, -32010)
+            error_payload = exc.to_dict()
+            error_payload["status_code"] = exc.status_code
+            raise MCPError(exc.message, code=rpc_code, data=error_payload) from exc
         except MCPError:
             raise
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.exception("send_message_to_ai failure")
-            raise MCPError(f"Failed to send message: {exc}") from exc
+            raise MCPError(
+                "Failed to send message",
+                code=-32099,
+                data={"error": str(exc), "session_id": session_id, "speaker_name": speaker_name},
+            ) from exc
 
     async def get_sessions(self, active_only: bool = True) -> Dict[str, Any]:
         try:

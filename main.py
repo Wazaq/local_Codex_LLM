@@ -14,6 +14,7 @@ from core.mcp_client import HTTPMCPClient
 from core.session_store import make_session_store
 from core import security as sec
 from core import utils
+from core.logging_config import setup_logging
 from routes.chat import chat_bp
 from routes.sessions import sessions_bp
 from routes.ail import ail_bp
@@ -25,26 +26,26 @@ from mcp.server import CodexMCPServer
 def create_app():
     app = Flask(__name__)
 
+    app_logger = setup_logging(app)
+    app_logger.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
+
     # Initialize core components
     metrics = PrometheusMetrics()
     metrics.set_gauge('codex_streaming_active', {}, 0)
     ail_client = HTTPMCPClient(config.MCP_URL)
     sessions = make_session_store()
 
-    # Logging setup (rotate daily, keep 7 backups)
-    app_logger = logging.getLogger('codex_bridge')
-    if not app_logger.handlers:
-        app_logger.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
-        logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
-        try:
-            os.makedirs(logs_dir, exist_ok=True)
-        except Exception:
-            logs_dir = os.path.dirname(__file__)
-        log_path = os.path.normpath(os.path.join(logs_dir, 'codex_bridge.log'))
-        handler = TimedRotatingFileHandler(log_path, when='midnight', backupCount=7, encoding='utf-8')
-        formatter = logging.Formatter('%(message)s')
-        handler.setFormatter(formatter)
-        app_logger.addHandler(handler)
+    # Add rotating log handler alongside structured logging (rotate daily, keep 7 backups)
+    logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except Exception:
+        logs_dir = os.path.dirname(__file__)
+    log_path = os.path.normpath(os.path.join(logs_dir, 'codex_bridge.log'))
+    if not any(isinstance(handler, TimedRotatingFileHandler) and getattr(handler, 'baseFilename', None) == log_path for handler in app_logger.handlers):
+        rotating_handler = TimedRotatingFileHandler(log_path, when='midnight', backupCount=7, encoding='utf-8')
+        rotating_handler.setFormatter(logging.Formatter('%(message)s'))
+        app_logger.addHandler(rotating_handler)
 
     security_logger = logging.getLogger('codex_security')
     if not security_logger.handlers:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick manual test script for the MCP endpoint."""
+"""Manual helper for exercising MCP endpoints on a running bridge."""
 
 import json
 from typing import Any, Dict
@@ -13,7 +13,7 @@ def _post(path: str, payload: Dict[str, Any], *, timeout: float = 10.0) -> reque
     return requests.post(f"{BASE_URL}{path}", json=payload, timeout=timeout)
 
 
-def test_mcp_tool(tool_name: str, params: Dict[str, Any], *, timeout: float = 10.0) -> None:
+def exercise_mcp_tool(tool_name: str, params: Dict[str, Any], *, timeout: float = 10.0) -> None:
     request_payload = {
         "jsonrpc": "2.0",
         "method": "tools/call",
@@ -36,10 +36,8 @@ def test_mcp_tool(tool_name: str, params: Dict[str, Any], *, timeout: float = 10
 
 
 def main() -> None:
-    # List sessions first
-    test_mcp_tool("get_sessions", {})
+    exercise_mcp_tool("get_sessions", {})
 
-    # Create a test session using the REST API to exercise other tools
     create_resp = _post("/sessions", {"ai_ids": ["claude", "codex"]})
     if not create_resp.ok:
         print("Failed to create test session:", create_resp.text)
@@ -51,8 +49,7 @@ def main() -> None:
         return
     print(f"Created session {session_id}")
 
-    # Exercise send_message_to_ai
-    test_mcp_tool(
+    exercise_mcp_tool(
         "send_message_to_ai",
         {
             "speaker_name": "codex",
@@ -62,8 +59,7 @@ def main() -> None:
         timeout=65.0,
     )
 
-    # Read context back
-    test_mcp_tool(
+    exercise_mcp_tool(
         "read_session_context",
         {
             "session_id": session_id,
