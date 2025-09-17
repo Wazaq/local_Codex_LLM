@@ -17,6 +17,9 @@ def test_health_endpoint_basics(monkeypatch, client):
     assert response.status_code == 200
     data = response.get_json()
     assert data["status"] == "MCP Bridge running"
+    summary = data.get("status_summary", {})
+    assert summary.get("level") in {"healthy", "degraded", "unavailable"}
+    assert "components" in summary
 
 
 def test_health_handles_internal_errors(monkeypatch, client, app):

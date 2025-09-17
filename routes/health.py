@@ -92,11 +92,30 @@ def health_check():
             except Exception:
                 pass
         storage_info['accessible'] = storage_info.get('storage_accessible')
+        mcp_ok, mcp_tools, mcp_rt, ollama_ok, ollama_rt = _check_dependencies(current_app)
+        level = 'healthy'
+        message = 'All systems operational'
+        if not (mcp_ok and ollama_ok and storage_info.get('storage_accessible')):
+            if any([mcp_ok, ollama_ok, storage_info.get('storage_accessible')]):
+                level = 'degraded'
+                message = 'Some components are experiencing issues'
+            else:
+                level = 'unavailable'
+                message = 'Core systems are offline'
         return jsonify({
             "status": "MCP Bridge running",
             "ail_url": ail_client.mcp_url,
             "sessions": {"count": count, **storage_info},
             "mcp": {"enabled": mcp_server is not None, "tools_count": tools_count, "endpoint": "/mcp"},
+            "status_summary": {
+                "level": level,
+                "message": message,
+                "components": {
+                    "mcp": {"connected": mcp_ok, "tools_available": mcp_tools, "response_time_ms": mcp_rt},
+                    "ollama": {"connected": ollama_ok, "response_time_ms": ollama_rt},
+                    "sessions": {"accessible": storage_info.get('storage_accessible'), "count": count},
+                },
+            },
         })
     except Exception as exc:
         log_error(logger, exc, {"endpoint": "/health"})

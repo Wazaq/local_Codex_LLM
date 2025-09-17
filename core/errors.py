@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
+from .user_messages import get_user_friendly_error
+
 
 class ErrorCode(Enum):
     """Enumerates standardized error codes returned by the bridge."""
@@ -42,19 +44,22 @@ class CodexError(Exception):
     def __init__(
         self,
         code: ErrorCode,
-        message: str,
+        message: Optional[str],
         details: Optional[Dict[str, Any]] = None,
         recovery_suggestion: Optional[str] = None,
         *,
         status_code: int = 400,
+        title: Optional[str] = None,
     ) -> None:
         self.code = code
-        self.message = message
+        friendly = get_user_friendly_error(code.value)
+        self.title = title or friendly.get("title")
+        self.message = message or friendly.get("message")
+        self.recovery_suggestion = recovery_suggestion or friendly.get("recovery")
         self.details = details or {}
-        self.recovery_suggestion = recovery_suggestion
         self.status_code = status_code
         self.timestamp = datetime.now(timezone.utc).isoformat()
-        super().__init__(message)
+        super().__init__(self.message)
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -63,6 +68,8 @@ class CodexError(Exception):
             "message": self.message,
             "timestamp": self.timestamp,
         }
+        if self.title:
+            payload["title"] = self.title
         if self.details:
             payload["details"] = self.details
         if self.recovery_suggestion:
@@ -72,10 +79,12 @@ class CodexError(Exception):
 
 def create_error_response(
     code: ErrorCode,
-    message: str,
+    message: Optional[str] = None,
     details: Optional[Dict[str, Any]] = None,
     recovery_suggestion: Optional[str] = None,
     status_code: int = 400,
+    *,
+    title: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], int]:
     """Return a standardized Flask-style error response tuple."""
 
@@ -85,6 +94,7 @@ def create_error_response(
         details,
         recovery_suggestion,
         status_code=status_code,
+        title=title,
     )
     return error.to_dict(), status_code
 
@@ -109,6 +119,7 @@ def ai_unreachable_error(ai_name: str, details: Optional[Dict[str, Any]] = None)
         extra,
         "Check AI service status and try again.",
         status_code=503,
+        title="Codex is unreachable",
     )
 
 
