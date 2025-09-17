@@ -204,127 +204,27 @@ def ail_get_context():
     return jsonify({"ok": True, "ai_id": ai_id, "data": normalized})
 
 
-@ail_bp.route('/mcp', methods=['POST'])
+@ail_bp.route('/mcp', methods=['POST', 'GET'], strict_slashes=False)
 def mcp_http_server():
-    # Minimal MCP interface passthrough for a few tools using the internal routes
-    app = current_app
-    req = request.get_json(silent=True) or {}
-    method = req.get('method')
-    req_id = req.get('id')
-    if method == 'tools/list':
-        tools = [
-            {
-                "name": "codex_chat",
-                "description": "Chat with Codex AI using her experimental personality",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"},
-                        "temperature": {"type": "number", "default": 0.7},
-                        "top_p": {"type": "number", "default": 0.9},
-                        "seed": {"type": ["integer", "null"], "default": None},
-                        "debug": {"type": "boolean", "default": False}
-                    },
-                    "required": ["message"]
-                }
-            },
-            {
-                "name": "codex_chat_with_context",
-                "description": "Chat with Codex using custom personality/memory context overrides",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"},
-                        "personality": {"type": ["array", "string"], "default": []},
-                        "memories": {"type": ["array", "string"], "default": []},
-                        "temperature": {"type": "number", "default": 0.7},
-                        "top_p": {"type": "number", "default": 0.9},
-                        "seed": {"type": ["integer", "null"], "default": None},
-                        "debug": {"type": "boolean", "default": False}
-                    },
-                    "required": ["message"]
-                }
-            },
-            {
-                "name": "codex_search_ail",
-                "description": "Search AI Library via Codex bridge",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "domain": {"type": ["string", "null"], "default": None},
-                        "limit": {"type": "integer", "default": 10}
-                    },
-                    "required": ["query"]
-                }
-            }
-        ]
-        return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}})
-    elif method == 'tools/call':
-        params = req.get('params', {})
-        name = params.get('name')
-        args = params.get('arguments', {})
-        if name == 'codex_chat':
-            payload = {
-                "message": args.get('message', ''),
-                "temperature": args.get('temperature', 0.7),
-                "top_p": args.get('top_p', 0.9),
-                "seed": args.get('seed', None),
-                "debug": args.get('debug', False)
-            }
-            with app.test_request_context(json=payload):
-                # import lazily to avoid cycles
-                from .chat import chat_with_codex
-                res = chat_with_codex()
-                resp_obj = res[0] if isinstance(res, tuple) else res
-                return jsonify({"jsonrpc": "2.0", "id": req_id, "result": json.loads(resp_obj.get_data(as_text=True))})
-        elif name == 'codex_chat_with_context':
-            message = args.get('message', '')
-            personality = args.get('personality', [])
-            memories = args.get('memories', [])
-            if isinstance(personality, str):
-                personality = [personality]
-            if isinstance(memories, str):
-                memories = [memories]
-            personality_lines = to_text_list(personality)
-            memory_lines = to_text_list(memories)
-            system_prompt = (
-                "You are Codex, a helpful AI with a distinct personality.\n"
-                "Use the provided personality traits and recent memories as context when responding.\n"
-                "If memories are not relevant, prioritize the user's message. Be concise and concrete.\n\n"
-                f"PERSONALITY:\n- " + "\n- ".join(personality_lines) +
-                ("\n\nRECENT MEMORIES:\n- " + "\n- ".join(memory_lines) if memory_lines else "")
-            )
-            chat_payload = {
-                "model": config.MODEL_NAME,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                "stream": False,
-                "options": {
-                    "num_ctx": config.NUM_CTX,
-                    "temperature": args.get('temperature', 0.7),
-                    "top_p": args.get('top_p', 0.9),
-                    **({"seed": args.get('seed')} if args.get('seed') is not None else {})
-                }
-            }
-            import requests
-            r = requests.post(f"{config.OLLAMA_BASE_URL}/api/chat", json=chat_payload, timeout=60)
-            r.raise_for_status()
-            data = r.json()
-            content = data.get('message', {}).get('content') or data.get('response', '')
-            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"response": content}})
-        elif name == 'codex_search_ail':
-            q = args.get('query', '')
-            domain = args.get('domain')
-            limit = args.get('limit', 10)
-            result = http_ail_search(q, domain=domain, limit=limit)
-            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": result})
-        else:
-            return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"message": f"Unknown tool: {name}"}})
-    else:
-        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"message": "Unsupported method"}})
+    mcp_server = current_app.config.get('mcp_server')
+    if request.method == 'GET':
+        # Lightweight probe so external clients can verify the endpoint exists
+        listed = mcp_server.server.list_tools() if mcp_server else {"tools": []}
+        return jsonify({"ok": True, "mcp": listed})
+
+    payload = request.get_json(silent=True)
+    if not mcp_server or payload is None:
+        return jsonify({
+            "jsonrpc": "2.0",
+            "id": payload.get('id') if isinstance(payload, dict) else None,
+            "error": {"code": -32700, "message": "Parse error"}
+        }), 400
+
+    response = mcp_server.handle_mcp_request(payload)
+    status = 200
+    if response.get('error') and response['error'] and response['error'].get('code') == -32700:
+        status = 400
+    return jsonify(response), status
 
 
 @ail_bp.route('/get-codex-personality', methods=['POST'])
@@ -382,4 +282,3 @@ def ail_search():
     except requests.exceptions.RequestException as e:
         metrics.inc_counter('codex_request_errors_total', {"endpoint": "/ail-search"})
         return jsonify({"error": f"AIL search failed: {str(e)}"})
-

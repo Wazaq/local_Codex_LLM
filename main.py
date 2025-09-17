@@ -19,6 +19,7 @@ from routes.sessions import sessions_bp
 from routes.ail import ail_bp
 from routes.ui import ui_bp
 from routes.health import health_bp
+from mcp.server import CodexMCPServer
 
 
 def create_app():
@@ -78,6 +79,9 @@ def create_app():
     app.register_blueprint(ail_bp)
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
+
+    # MCP server integration (used by legacy /mcp route in routes.ail)
+    app.config['mcp_server'] = CodexMCPServer(app)
 
     # Shutdown gate
     app.config['SHUTTING_DOWN'] = False
@@ -156,4 +160,3 @@ if __name__ == '__main__':
 
     print("🌐 Bridge running on: http://localhost:8080")
     app.run(host='0.0.0.0', port=8080, debug=False)
-

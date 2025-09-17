@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, request, jsonify, current_app
 
 from core.session_store import approx_tokens, compact_session_if_needed
@@ -61,11 +63,18 @@ def list_sessions():
             "session_id": s.id,
             "created_at": s.created_at,
             "messages": len(s.messages or []),
+            "message_count": len(s.messages or []),
             "token_usage": s.token_usage,
             "ai_ids": s.ai_ids,
-            "summary_len": len(s.summary or '')
+            "summary_len": len(s.summary or ''),
+            "last_activity": _ts_to_iso(s.last_updated),
         })
-    return jsonify({"ok": True, "sessions": out})
+    return jsonify({
+        "ok": True,
+        "success": True,
+        "count": len(out),
+        "sessions": out
+    })
 
 
 @sessions_bp.route('/sessions/<session_id>/messages', methods=['POST'])
@@ -116,3 +125,12 @@ def _update_session_metrics():
         metrics.set_gauge('codex_sessions_token_usage', {}, float(tok))
     except Exception:
         pass
+
+
+def _ts_to_iso(ts):
+    if not ts:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return None

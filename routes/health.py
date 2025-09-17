@@ -51,31 +51,46 @@ def health_check():
     ail_client = current_app.config['ail_client']
     sessions = current_app.config.get('sessions')
     count, _ = (sessions.snapshot_stats() if sessions else (0, 0))
-    # Detect actual backend from the store instance, not just config
-    detected_backend = 'memory'
-    storage_info = {"backend": detected_backend, "accessible": True}
+    storage_info = {
+        "storage": "memory",
+        "backend": "memory",
+        "storage_accessible": True,
+    }
     try:
         if sessions is not None:
             cls = type(sessions).__name__.lower()
             if 'file' in cls:
-                detected_backend = 'file'
+                storage_info.update({
+                    "storage": "file-based",
+                    "backend": "file",
+                })
                 path = getattr(sessions, '_path', getattr(config, 'SESSION_STORAGE_PATH', 'data/sessions.json'))
                 d = os.path.dirname(path) or '.'
-                ok = os.access(d, os.R_OK | os.W_OK)
-                storage_info.update({"backend": detected_backend, "path": path, "accessible": bool(ok)})
+                storage_info['path'] = path
+                storage_info['storage_accessible'] = bool(os.access(d, os.R_OK | os.W_OK))
             elif 'redis' in cls:
-                detected_backend = 'redis'
-                storage_info.update({"backend": detected_backend})
+                storage_info.update({"storage": "redis", "backend": "redis"})
+                storage_info['storage_accessible'] = True
             else:
-                # memory or unknown custom
                 _ = sessions.list_ids()
-                storage_info.update({"backend": detected_backend, "accessible": True})
+                storage_info['storage_accessible'] = True
     except Exception:
-        storage_info["accessible"] = False
+        storage_info['storage_accessible'] = False
+    mcp_server = current_app.config.get('mcp_server')
+    tools_count = 0
+    if mcp_server is not None:
+        try:
+            listed = mcp_server.server.list_tools()
+            tools = listed.get('tools') if isinstance(listed, dict) else []
+            tools_count = len(tools) if isinstance(tools, list) else 0
+        except Exception:
+            pass
+    storage_info['accessible'] = storage_info.get('storage_accessible')
     return jsonify({
         "status": "MCP Bridge running",
         "ail_url": ail_client.mcp_url,
-        "sessions": {"count": count, **storage_info}
+        "sessions": {"count": count, **storage_info},
+        "mcp": {"enabled": mcp_server is not None, "tools_count": tools_count, "endpoint": "/mcp"},
     })
 
 
