@@ -16,7 +16,7 @@ def test_approx_tokens_estimation():
 
 
 def test_compact_session_if_needed_reduces_tokens():
-    session = Session(ai_ids=["codex"], max_tokens=2)
+    session = Session(ai_ids=["codex"], max_tokens=2, display_name="Test")
     session.messages = [
         {"from": "user", "content": "long message one"},
         {"from": "ai", "content": "long message two"},
@@ -28,5 +28,6 @@ def test_compact_session_if_needed_reduces_tokens():
 
     assert session.token_usage < 20
     assert len(session.messages) < 2
+    assert session.display_name == "Test"
     assert metrics.count >= 1
     assert session.summary

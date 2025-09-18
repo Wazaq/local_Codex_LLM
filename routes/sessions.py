@@ -52,8 +52,9 @@ def create_session():
         return error_payload, status
 
     ttl_seconds = data.get('ttl_seconds')
+    display_name = data.get('display_name')
     try:
-        s = sessions.create(ai_ids=ai_ids, max_tokens=max_tokens, ttl_seconds=ttl_seconds)
+        s = sessions.create(ai_ids=ai_ids, max_tokens=max_tokens, ttl_seconds=ttl_seconds, display_name=display_name)
     except CodexError as exc:
         log_error(logger, exc, {"endpoint": "/sessions"})
         return exc.to_dict(), exc.status_code
@@ -123,6 +124,7 @@ def get_session_messages(session_id):
         return jsonify({
             "ok": True,
             "session_id": s.id,
+            "display_name": s.display_name,
             "summary": s.summary,
             "messages": msgs,
             "token_usage": s.token_usage
@@ -157,6 +159,7 @@ def list_sessions():
                 continue
             out.append({
                 "session_id": s.id,
+                "display_name": s.display_name,
                 "created_at": s.created_at,
                 "messages": len(s.messages or []),
                 "message_count": len(s.messages or []),
@@ -267,6 +270,60 @@ def delete_session(session_id):
         error_payload, status = create_error_response(
             ErrorCode.SYSTEM_ERROR,
             "Failed to delete session",
+            {"session_id": session_id, "error_type": type(exc).__name__},
+            "Please try again later.",
+            status_code=500,
+        )
+        return error_payload, status
+
+
+@sessions_bp.route('/sessions/<session_id>', methods=['PATCH'])
+def update_session(session_id):
+    logger = current_app.logger
+    log_request(logger, f'/sessions/{session_id}', session_id=session_id)
+
+    sessions = current_app.config['sessions']
+
+    try:
+        s = sessions.get(session_id)
+        if not s:
+            return session_not_found_error(session_id)
+
+        data = request.get_json(silent=True)
+        if not data:
+            return invalid_request_error(
+                "Request body must be valid JSON",
+                {"endpoint": "/sessions/<session_id>", "session_id": session_id}
+            )
+
+        if 'display_name' not in data:
+            return invalid_request_error(
+                "Missing 'display_name' field",
+                {"endpoint": "/sessions/<session_id>", "session_id": session_id}
+            )
+
+        display_name = data.get('display_name')
+        if display_name is not None and not isinstance(display_name, str):
+            return invalid_request_error(
+                "Invalid 'display_name' type",
+                {"expected": "string", "received": type(display_name).__name__}
+            )
+
+        s.display_name = (display_name or '').strip() or None
+        try:
+            sessions.save(s)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "session": s.to_dict(False)})
+
+    except CodexError as exc:
+        log_error(logger, exc, {"endpoint": "/sessions/<session_id>", "session_id": session_id})
+        return exc.to_dict(), exc.status_code
+    except Exception as exc:
+        log_error(logger, exc, {"endpoint": "/sessions/<session_id>", "session_id": session_id})
+        error_payload, status = create_error_response(
+            ErrorCode.SYSTEM_ERROR,
+            "Failed to update session",
             {"session_id": session_id, "error_type": type(exc).__name__},
             "Please try again later.",
             status_code=500,

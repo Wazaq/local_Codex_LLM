@@ -12,7 +12,7 @@ from .metrics import PrometheusMetrics
 
 
 class Session:
-    def __init__(self, ai_ids=None, max_tokens=config.SESSION_TOKEN_LIMIT, ttl_seconds=config.SESSION_TTL_SECONDS):
+    def __init__(self, ai_ids=None, max_tokens=config.SESSION_TOKEN_LIMIT, ttl_seconds=config.SESSION_TTL_SECONDS, display_name: str | None = None):
         self.id = str(uuid.uuid4())
         self.created_at = now_iso()
         self.ai_ids = list(ai_ids or [])
@@ -22,6 +22,7 @@ class Session:
         self.summary = ""
         self.token_usage = 0
         self.last_updated = time.time()
+        self.display_name = (display_name or "").strip() or None
 
     def to_dict(self, include_messages=False):
         d = {
@@ -32,6 +33,7 @@ class Session:
             "ttl_seconds": self.ttl_seconds,
             "token_usage": self.token_usage,
             "summary_len": len(self.summary or ""),
+            "display_name": self.display_name,
             "messages": (self.messages if include_messages else None)
         }
         if not include_messages:
@@ -49,11 +51,17 @@ class Session:
             "summary": self.summary or "",
             "token_usage": int(self.token_usage),
             "last_updated": float(self.last_updated),
+            "display_name": self.display_name,
         }
 
     @staticmethod
     def from_json(obj: Dict[str, Any]) -> 'Session':
-        s = Session(ai_ids=obj.get('ai_ids', []), max_tokens=obj.get('max_tokens', config.SESSION_TOKEN_LIMIT), ttl_seconds=obj.get('ttl_seconds', config.SESSION_TTL_SECONDS))
+        s = Session(
+            ai_ids=obj.get('ai_ids', []),
+            max_tokens=obj.get('max_tokens', config.SESSION_TOKEN_LIMIT),
+            ttl_seconds=obj.get('ttl_seconds', config.SESSION_TTL_SECONDS),
+            display_name=obj.get('display_name'),
+        )
         s.id = obj.get('id', s.id)
         s.created_at = obj.get('created_at', s.created_at)
         s.messages = obj.get('messages', [])
@@ -68,8 +76,13 @@ class SessionStore:
         self._lock = threading.Lock()
         self._sessions = {}
 
-    def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None):
-        s = Session(ai_ids=ai_ids, max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT, ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS)
+    def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None, display_name=None):
+        s = Session(
+            ai_ids=ai_ids,
+            max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT,
+            ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS,
+            display_name=display_name,
+        )
         with self._lock:
             self._sessions[s.id] = s
         return s
@@ -173,8 +186,13 @@ class FileSessionStore:
         except Exception as e:
             logging.error(f"Session store: failed to persist sessions: {e}")
 
-    def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None):
-        s = Session(ai_ids=ai_ids, max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT, ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS)
+    def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None, display_name=None):
+        s = Session(
+            ai_ids=ai_ids,
+            max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT,
+            ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS,
+            display_name=display_name,
+        )
         with self._lock:
             self._sessions[s.id] = s
             self._flush()
@@ -225,8 +243,13 @@ def make_session_store():
                     self._prefix = 'codex:sessions:'
                 def _key(self, sid: str) -> str:
                     return f"{self._prefix}{sid}"
-                def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None):
-                    s = Session(ai_ids=ai_ids, max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT, ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS)
+                def create(self, ai_ids=None, max_tokens=None, ttl_seconds=None, display_name=None):
+                    s = Session(
+                        ai_ids=ai_ids,
+                        max_tokens=max_tokens or config.SESSION_TOKEN_LIMIT,
+                        ttl_seconds=ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS,
+                        display_name=display_name,
+                    )
                     self.save(s)
                     return s
                 def get(self, session_id: str):
