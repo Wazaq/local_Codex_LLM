@@ -11,17 +11,20 @@ from core.errors import (
     session_not_found_error,
 )
 from core.logging_config import log_error, log_request
+from core.middleware import track_request_metrics
 
 
 sessions_bp = Blueprint('sessions', __name__)
 
 
 @sessions_bp.route('/sessions', methods=['POST'])
+@track_request_metrics
 def create_session():
     logger = current_app.logger
     log_request(logger, '/sessions')
 
     metrics = current_app.config['metrics']
+    dashboard_metrics = current_app.config.get('dashboard_metrics')
     sessions = current_app.config['sessions']
     data = request.get_json(silent=True)
     if data is None:
@@ -71,10 +74,13 @@ def create_session():
 
     metrics.inc_counter('codex_sessions_created_total', {})
     _update_session_metrics()
+    if dashboard_metrics:
+        dashboard_metrics.record_session_event('created', s.id, {'ai_ids': ai_ids})
     return jsonify({"ok": True, "session": s.to_dict(False)})
 
 
 @sessions_bp.route('/sessions/<session_id>', methods=['GET'])
+@track_request_metrics
 def get_session(session_id):
     logger = current_app.logger
     log_request(logger, f'/sessions/{session_id}', session_id=session_id)
@@ -98,6 +104,7 @@ def get_session(session_id):
 
 
 @sessions_bp.route('/sessions/<session_id>/messages', methods=['GET'])
+@track_request_metrics
 def get_session_messages(session_id):
     logger = current_app.logger
     log_request(logger, f'/sessions/{session_id}/messages', session_id=session_id)
@@ -145,6 +152,7 @@ def get_session_messages(session_id):
 
 
 @sessions_bp.route('/sessions', methods=['GET'])
+@track_request_metrics
 def list_sessions():
     logger = current_app.logger
     log_request(logger, '/sessions')
@@ -187,12 +195,14 @@ def list_sessions():
 
 
 @sessions_bp.route('/sessions/<session_id>/messages', methods=['POST'])
+@track_request_metrics
 def add_session_message(session_id):
     logger = current_app.logger
     log_request(logger, f'/sessions/{session_id}/messages', session_id=session_id)
 
     sessions = current_app.config['sessions']
     metrics = current_app.config['metrics']
+    dashboard_metrics = current_app.config.get('dashboard_metrics')
 
     try:
         s = sessions.get(session_id)
@@ -231,6 +241,17 @@ def add_session_message(session_id):
         except Exception as exc:
             log_error(logger, exc, {"endpoint": "/sessions/<session_id>/messages", "session_id": session_id})
         _update_session_metrics()
+        if dashboard_metrics:
+            dashboard_metrics.record_session_event(
+                'message_sent',
+                s.id,
+                {
+                    'sender_ai_id': ai_id or frm,
+                    'message_type': frm,
+                    'length': len(content or ''),
+                    'endpoint': '/sessions/<session_id>/messages',
+                },
+            )
         return jsonify({"ok": True, "session": s.to_dict(False)})
 
     except CodexError as exc:
@@ -249,18 +270,22 @@ def add_session_message(session_id):
 
 
 @sessions_bp.route('/sessions/<session_id>', methods=['DELETE'])
+@track_request_metrics
 def delete_session(session_id):
     logger = current_app.logger
     log_request(logger, f'/sessions/{session_id}', session_id=session_id)
 
     sessions = current_app.config['sessions']
     metrics = current_app.config['metrics']
+    dashboard_metrics = current_app.config.get('dashboard_metrics')
     try:
         ok = sessions.delete(session_id)
         if not ok:
             return session_not_found_error(session_id)
         metrics.inc_counter('codex_sessions_deleted_total', {})
         _update_session_metrics()
+        if dashboard_metrics:
+            dashboard_metrics.record_session_event('deleted', session_id, {})
         return jsonify({"ok": True})
     except CodexError as exc:
         log_error(logger, exc, {"endpoint": "/sessions/<session_id>", "session_id": session_id})
@@ -278,11 +303,13 @@ def delete_session(session_id):
 
 
 @sessions_bp.route('/sessions/<session_id>', methods=['PATCH'])
+@track_request_metrics
 def update_session(session_id):
     logger = current_app.logger
     log_request(logger, f'/sessions/{session_id}', session_id=session_id)
 
     sessions = current_app.config['sessions']
+    dashboard_metrics = current_app.config.get('dashboard_metrics')
 
     try:
         s = sessions.get(session_id)
@@ -314,6 +341,15 @@ def update_session(session_id):
             sessions.save(s)
         except Exception:
             pass
+        if dashboard_metrics:
+            dashboard_metrics.record_session_event(
+                'updated',
+                s.id,
+                {
+                    'field': 'display_name',
+                    'value': s.display_name,
+                },
+            )
         return jsonify({"ok": True, "session": s.to_dict(False)})
 
     except CodexError as exc:

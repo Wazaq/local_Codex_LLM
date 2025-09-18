@@ -15,16 +15,19 @@ from core.errors import (
 from core.logging_config import log_error, log_request
 from core.session_store import approx_tokens, compact_session_if_needed
 from core.utils import extract_results_from_mcp, http_ail_search, now_iso
+from core.middleware import track_request_metrics
 
 
 chat_bp = Blueprint('chat', __name__)
 
 
 @chat_bp.route('/chat-with-codex', methods=['POST'])
+@track_request_metrics
 def chat_with_codex():
     app = current_app
     logger = app.logger
     metrics = app.config['metrics']
+    dashboard_metrics = app.config.get('dashboard_metrics')
     sessions = app.config['sessions']
     ail_client = app.config['ail_client']
     security_logger = app.config['security_logger']
@@ -212,6 +215,17 @@ def chat_with_codex():
                 sessions.save(sess)
             except Exception:
                 pass
+            if dashboard_metrics:
+                dashboard_metrics.record_session_event(
+                    'message_sent',
+                    sess.id,
+                    {
+                        'sender_ai_id': requester_ai_id,
+                        'message_type': 'user',
+                        'length': len(user_message or ''),
+                        'endpoint': '/chat-with-codex',
+                    },
+                )
             messages.append({"role": "user", "content": (f"[from:{requester_ai_id}] " + user_message) if requester_ai_id else user_message})
         else:
             messages.append({"role": "user", "content": (f"[from:{requester_ai_id}] " + user_message) if requester_ai_id else user_message})
@@ -254,6 +268,17 @@ def chat_with_codex():
             except Exception:
                 pass
             _update_session_metrics()
+            if dashboard_metrics:
+                dashboard_metrics.record_session_event(
+                    'message_sent',
+                    sess.id,
+                    {
+                        'sender_ai_id': config.BRIDGE_AI_ID,
+                        'message_type': 'assistant',
+                        'length': len(content or ''),
+                        'endpoint': '/chat-with-codex',
+                    },
+                )
 
         if include_debug:
             result["debug_context_system"] = system_prompt
@@ -326,10 +351,12 @@ def chat_with_codex():
 
 
 @chat_bp.route('/chat-with-codex/stream', methods=['POST'])
+@track_request_metrics
 def chat_with_codex_stream():
     app = current_app
     logger = app.logger
     metrics = app.config['metrics']
+    dashboard_metrics = app.config.get('dashboard_metrics')
     sessions = app.config['sessions']
     ail_client = app.config['ail_client']
     security_logger = app.config['security_logger']
@@ -500,6 +527,17 @@ def chat_with_codex_stream():
                 sessions.save(sess)
             except Exception:
                 pass
+            if dashboard_metrics:
+                dashboard_metrics.record_session_event(
+                    'message_sent',
+                    sess.id,
+                    {
+                        'sender_ai_id': requester_ai_id,
+                        'message_type': 'user',
+                        'length': len(user_message or ''),
+                        'endpoint': '/chat-with-codex/stream',
+                    },
+                )
 
         chat_payload = {
             "model": config.MODEL_NAME,
@@ -571,6 +609,17 @@ def chat_with_codex_stream():
                     except Exception:
                         pass
                     _update_session_metrics()
+                    if dashboard_metrics:
+                        dashboard_metrics.record_session_event(
+                            'message_sent',
+                            sess.id,
+                            {
+                                'sender_ai_id': config.BRIDGE_AI_ID,
+                                'message_type': 'assistant',
+                                'length': len(full),
+                                'endpoint': '/chat-with-codex/stream',
+                            },
+                        )
                 yield f"data: {json.dumps({'type': 'response_end', 'session_id': (sess.id if sess else None)})}\n\n"
 
         headers = {
@@ -608,9 +657,13 @@ def chat_with_codex_stream():
 def _update_session_metrics():
     metrics = current_app.config['metrics']
     sessions = current_app.config['sessions']
+    dashboard_metrics = current_app.config.get('dashboard_metrics')
     try:
         n, tok = sessions.snapshot_stats()
         metrics.set_gauge('codex_sessions_active', {}, float(n))
         metrics.set_gauge('codex_sessions_token_usage', {}, float(tok))
+        if dashboard_metrics:
+            dashboard_metrics.set_gauge('sessions_active', float(n))
+            dashboard_metrics.set_gauge('sessions_total_tokens', float(tok))
     except Exception:
         pass

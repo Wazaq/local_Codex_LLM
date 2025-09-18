@@ -5,54 +5,618 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex Chat Monitor</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b0d10; color: #e6edf3; }
-      header { padding: 12px 16px; background: #11161c; border-bottom: 1px solid #1f2937; display:flex; align-items:center; gap:8px; flex-wrap: wrap; }
-      select, button, input[type=text], input[type=range] { background:#0f172a; color:#e6edf3; border:1px solid #334155; padding:6px 8px; border-radius:6px; }
-      input#sessionName { min-width: 180px; }
-      button:hover { background:#111827; cursor:pointer; }
-      #stats { margin-left:auto; font-size:12px; opacity:.8 }
-      #chat { padding: 12px 16px; height: calc(100vh - 140px); overflow-y: auto; box-sizing: border-box; }
-      #compose { display:flex; gap:8px; align-items:center; padding: 8px 16px 12px; border-top: 1px solid #1f2937; background:#0b0d10; position: sticky; bottom: 0; }
-      #msgBox { flex: 1; }
-      .msg { max-width: 70%; margin: 8px 0; padding: 10px 12px; border-radius: 10px; line-height: 1.4; white-space: pre-wrap; box-shadow: 0 8px 18px rgba(0,0,0,0.18); }
-      .msg.user { background: #1f2937; border-top-left-radius: 4px; }
-      .msg.ai { background: linear-gradient(135deg, #0d3b66, #1d4f91); border-top-left-radius: 4px; }
-      .msg.system { background: #f3e5f5; color: #2d0b45; border-left: 4px solid #9c27b0; }
-      .msg.error { background: #ffebee; color: #5f2120; border-left: 4px solid #f44336; }
-      .meta { font-size: 11px; opacity: 0.75; margin-bottom: 4px; display:flex; align-items:center; gap:6px; }
-      .meta .timestamp { font-variant-numeric: tabular-nums; }
-      .right { margin-left: auto; text-align: right; }
-      .left  { margin-right: auto; text-align: left; }
-      .row { display:flex; flex-direction: column; }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        margin: 0;
+        background: #0b0d10;
+        color: #e6edf3;
+        min-height: 100vh;
+      }
 
-      /* Error notification styles */
-      .error-notification { position: fixed; top: 20px; right: 20px; max-width: 400px; background: #ff5c5c; color: #fff; border-radius: 10px; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4); z-index: 1100; transform: translateX(120%); transition: transform 0.3s ease-in-out; backdrop-filter: blur(6px); }
-      .error-notification.show { transform: translateX(0); }
-      .error-notification.hidden { display: none; }
-      .error-content { display: flex; padding: 16px 18px; align-items: flex-start; gap: 12px; }
-      .error-icon { font-size: 26px; flex-shrink: 0; }
-      .error-details { flex: 1; }
-      .error-message { font-weight: 600; margin-bottom: 4px; letter-spacing: 0.01em; }
-      .error-recovery { font-size: 14px; opacity: 0.9; margin-bottom: 4px; }
-      .error-code { font-size: 12px; opacity: 0.75; font-family: "JetBrains Mono", "Fira Code", monospace; }
-      .error-dismiss { background: rgba(255,255,255,0.14); border: none; color: inherit; font-size: 20px; cursor: pointer; padding: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; flex-shrink: 0; transition: background 0.2s ease; }
-      .error-dismiss:hover { background: rgba(255,255,255,0.3); }
+      .app-shell {
+        display: flex;
+        min-height: 100vh;
+        width: 100%;
+      }
 
-      /* System status indicator */
-      .system-status { position: fixed; bottom: 20px; right: 20px; display: flex; align-items: center; gap: 8px; background: rgba(15, 23, 42, 0.85); color: #fff; padding: 8px 14px; border-radius: 24px; font-size: 13px; z-index: 1050; box-shadow: 0 8px 20px rgba(0,0,0,0.35); backdrop-filter: blur(4px); }
-      .status-indicator { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
-      .status-indicator.error { background: #ef4444; }
-      .status-indicator.warning { background: #f59e0b; }
-      .status-text { letter-spacing: 0.02em; }
-      @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.1); } }
+      .sidebar {
+        width: 280px;
+        background: #11161c;
+        border-right: 1px solid #1f2937;
+        padding: 20px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
 
-      /* Loading indicator */
-      .loading-indicator { display: inline-flex; align-items: center; gap: 8px; color: #9ca3af; font-style: italic; }
-      .loading-dots { display: inline-flex; gap: 3px; }
-      .loading-dots span { width: 6px; height: 6px; background: #9ca3af; border-radius: 50%; animation: loading-bounce 1.4s infinite ease-in-out both; }
+      .sidebar-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .sidebar-title {
+        font-weight: 600;
+        font-size: 1.05rem;
+      }
+
+      .icon-button {
+        border: none;
+        background: rgba(148, 163, 184, 0.12);
+        color: #cbd5f5;
+        border-radius: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.2s ease;
+      }
+
+      .icon-button:hover {
+        background: rgba(148, 163, 184, 0.2);
+        transform: translateY(-1px);
+      }
+
+      .sidebar-new {
+        border: none;
+        background: linear-gradient(135deg, #4f46e5, #60a5fa);
+        color: white;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .sidebar-new:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 24px rgba(99, 102, 241, 0.35);
+      }
+
+      .session-list {
+        flex: 1;
+        overflow-y: auto;
+        padding-right: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .session-empty {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .session-item {
+        border: 1px solid transparent;
+        background: #0f172a;
+        color: inherit;
+        border-radius: 12px;
+        padding: 12px 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+      }
+
+      .session-item:focus {
+        outline: 2px solid rgba(99, 102, 241, 0.6);
+        outline-offset: 2px;
+      }
+
+      .session-item:hover {
+        background: #182540;
+        transform: translateY(-1px);
+      }
+
+      .session-item.active {
+        border-color: #6366f1;
+        background: #1f2a44;
+      }
+
+      .session-info {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: flex-start;
+        flex: 1;
+      }
+
+      .session-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+
+      .session-meta {
+        font-size: 0.78rem;
+        color: #9ca3af;
+      }
+
+      .session-actions {
+        display: inline-flex;
+        gap: 6px;
+      }
+
+      .session-action {
+        border: none;
+        background: rgba(148, 163, 184, 0.18);
+        color: #ccd6f6;
+        border-radius: 8px;
+        padding: 6px 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        line-height: 1;
+        transition: background 0.2s ease, transform 0.2s ease;
+      }
+
+      .session-action:hover {
+        background: rgba(148, 163, 184, 0.28);
+        transform: translateY(-1px);
+      }
+
+      .session-action.delete {
+        color: #fca5a5;
+        background: rgba(248, 113, 113, 0.12);
+      }
+
+      .session-action.delete:hover {
+        background: rgba(248, 113, 113, 0.2);
+      }
+
+      .sidebar-footer {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .sidebar-link {
+        color: #a5b4fc;
+        text-decoration: none;
+        font-size: 0.9rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        opacity: 0.9;
+      }
+
+      .sidebar-link:hover {
+        opacity: 1;
+        text-decoration: underline;
+      }
+
+      body.sidebar-hidden .sidebar {
+        display: none;
+      }
+
+      .sidebar-button {
+        flex: 1;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: transparent;
+        color: #cbd5f5;
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease;
+      }
+
+      .sidebar-button:hover {
+        background: rgba(15, 23, 42, 0.65);
+        border-color: rgba(99, 102, 241, 0.5);
+      }
+
+      .sidebar-button.danger {
+        color: #f87171;
+        border-color: rgba(248, 113, 113, 0.4);
+      }
+
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 20px;
+        border-bottom: 1px solid #1f2937;
+        background: #11161c;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+      }
+
+      .topbar h1 {
+        flex: 1;
+        margin: 0;
+        font-size: 1.3rem;
+        letter-spacing: 0.01em;
+      }
+
+      .ghost-button {
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: transparent;
+        color: #cbd5f5;
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+      }
+
+      .ghost-button:hover {
+        background: rgba(148, 163, 184, 0.18);
+        border-color: rgba(148, 163, 184, 0.45);
+        transform: translateY(-1px);
+      }
+
+      .session-toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 12px 20px;
+        border-bottom: 1px solid #1f2937;
+        flex-wrap: wrap;
+        background: #0b0d10;
+      }
+
+      #sessionName {
+        background: #0f172a;
+        color: #e6edf3;
+        border: 1px solid #334155;
+        padding: 6px 10px;
+        border-radius: 8px;
+        min-width: 220px;
+        flex: 1;
+      }
+
+      #sessionName:focus {
+        outline: none;
+        border-color: #6366f1;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+      }
+
+      .primary-button {
+        border: none;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        color: white;
+        padding: 7px 16px;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .primary-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 22px rgba(99, 102, 241, 0.35);
+      }
+
+      .danger-button {
+        border: 1px solid rgba(248, 113, 113, 0.4);
+        background: rgba(248, 113, 113, 0.1);
+        color: #f87171;
+      }
+
+      .danger-button:hover {
+        background: rgba(248, 113, 113, 0.2);
+      }
+
+      #stats {
+        font-size: 0.85rem;
+        opacity: 0.75;
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      #chat {
+        flex: 1;
+        padding: 16px 20px;
+        overflow-y: auto;
+        box-sizing: border-box;
+      }
+
+      #compose {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 12px 20px 16px;
+        border-top: 1px solid #1f2937;
+        background: #0b0d10;
+        position: sticky;
+        bottom: 0;
+      }
+
+      #compose label {
+        font-size: 0.8rem;
+        opacity: 0.9;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #fromId,
+      #msgBox {
+        background: #0f172a;
+        color: inherit;
+        border: 1px solid #334155;
+        padding: 8px 10px;
+        border-radius: 8px;
+      }
+
+      #fromId {
+        width: 140px;
+      }
+
+      #fromId:focus,
+      #msgBox:focus {
+        outline: none;
+        border-color: #6366f1;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+      }
+
+      #limitRange {
+        accent-color: #6366f1;
+      }
+
+      #sendBtn {
+        border: none;
+        background: linear-gradient(135deg, #4f46e5, #60a5fa);
+        color: white;
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      #sendBtn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 18px rgba(99, 102, 241, 0.35);
+      }
+
+      .row {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .msg {
+        max-width: 70%;
+        margin: 8px 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+      }
+
+      .msg.user {
+        background: #1f2937;
+        border-top-left-radius: 4px;
+      }
+
+      .msg.ai {
+        background: linear-gradient(135deg, #0d3b66, #1d4f91);
+        border-top-left-radius: 4px;
+      }
+
+      .msg.system {
+        background: #f3e5f5;
+        color: #2d0b45;
+        border-left: 4px solid #9c27b0;
+      }
+
+      .msg.error {
+        background: #ffebee;
+        color: #5f2120;
+        border-left: 4px solid #f44336;
+      }
+
+      .meta {
+        font-size: 11px;
+        opacity: 0.75;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .meta .timestamp {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .left {
+        margin-right: auto;
+        text-align: left;
+      }
+
+      .error-notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        max-width: 400px;
+        background: #ff5c5c;
+        color: #fff;
+        border-radius: 10px;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+        z-index: 1100;
+        transform: translateX(120%);
+        transition: transform 0.3s ease-in-out;
+        backdrop-filter: blur(6px);
+      }
+
+      .error-notification.show {
+        transform: translateX(0);
+      }
+
+      .error-notification.hidden {
+        display: none;
+      }
+
+      .error-content {
+        display: flex;
+        padding: 16px 18px;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .error-icon {
+        font-size: 26px;
+        flex-shrink: 0;
+      }
+
+      .error-details {
+        flex: 1;
+      }
+
+      .error-message {
+        font-weight: 600;
+        margin-bottom: 4px;
+        letter-spacing: 0.01em;
+      }
+
+      .error-recovery {
+        font-size: 14px;
+        opacity: 0.9;
+        margin-bottom: 4px;
+      }
+
+      .error-code {
+        font-size: 12px;
+        opacity: 0.75;
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+      }
+
+      .error-dismiss {
+        background: rgba(255, 255, 255, 0.14);
+        border: none;
+        color: inherit;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0;
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        flex-shrink: 0;
+        transition: background 0.2s ease;
+      }
+
+      .error-dismiss:hover {
+        background: rgba(255, 255, 255, 0.3);
+      }
+
+      .system-status {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(15, 23, 42, 0.85);
+        color: #fff;
+        padding: 8px 14px;
+        border-radius: 24px;
+        font-size: 13px;
+        z-index: 1050;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        backdrop-filter: blur(4px);
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #22c55e;
+        animation: pulse 2s infinite;
+      }
+
+      .status-indicator.error {
+        background: #ef4444;
+      }
+
+      .status-indicator.warning {
+        background: #f59e0b;
+      }
+
+      .status-text {
+        letter-spacing: 0.02em;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.6; transform: scale(1.1); }
+      }
+
+      .loading-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: #9ca3af;
+        font-style: italic;
+      }
+
+      .loading-dots {
+        display: inline-flex;
+        gap: 3px;
+      }
+
+      .loading-dots span {
+        width: 6px;
+        height: 6px;
+        background: #9ca3af;
+        border-radius: 50%;
+        animation: loading-bounce 1.4s infinite ease-in-out both;
+      }
+
       .loading-dots span:nth-child(1) { animation-delay: -0.32s; }
       .loading-dots span:nth-child(2) { animation-delay: -0.16s; }
-      @keyframes loading-bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+
+      @keyframes loading-bounce {
+        0%, 80%, 100% { transform: scale(0); }
+        40% { transform: scale(1); }
+      }
+
+      @media (max-width: 1024px) {
+        .app-shell {
+          flex-direction: column;
+        }
+
+        .sidebar {
+          width: 100%;
+          border-right: none;
+          border-bottom: 1px solid #1f2937;
+        }
+
+        .topbar {
+          position: relative;
+        }
+      }
+
+      @media (max-width: 768px) {
+        #compose {
+          flex-wrap: wrap;
+        }
+
+        #stats {
+          margin-left: 0;
+        }
+
+        .topbar h1 {
+          font-size: 1.1rem;
+        }
+
+        .session-toolbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
     </style>
   </head>
   <body>
@@ -71,32 +635,51 @@
       <div class="status-indicator" id="status-indicator"></div>
       <span class="status-text" id="status-text">Connecting…</span>
     </div>
-
-    <header>
-      <strong>Codex Chat Monitor</strong>
-      <label for="sessionSel" style="margin-left:8px">Session:</label>
-      <select id="sessionSel"></select>
-      <input id="sessionName" type="text" placeholder="Friendly name" />
-      <button id="saveNameBtn" title="Save friendly name">Save Name</button>
-      <button id="loadBtn">Load</button>
-      <button id="newBtn">New</button>
-      <button id="deleteBtn" title="Delete current session">Delete</button>
-      <button id="refreshBtn">Refresh</button>
-      <button id="copyIdBtn" title="Copy current session ID">Copy SysID</button>
-      <span id="stats"></span>
-    </header>
-    <div id="chat"></div>
-    <div id="compose">
-      <label for="fromId">From:</label>
-      <input id="fromId" type="text" placeholder="sender id (e.g., brent)" value="brent" style="width:140px" />
-      <input id="msgBox" type="text" placeholder="Type a message." />
-      <label style="display:flex; align-items:center; gap:6px; font-size:12px; opacity:.9"> <input id="autoReply" type="checkbox" checked /> Ask Codex to reply</label>
-      
-      <label style="display:flex; align-items:center; gap:6px; font-size:12px; opacity:.9"> Last <span id="limitLabel">100</span> <input id="limitRange" type="range" min="10" max="500" step="10" value="100" /></label>
-      <button id="sendBtn">Send</button>
+    <div class="app-shell">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Sessions</span>
+          <button id="closeSidebar" class="icon-button" title="Hide session navigator">✕</button>
+        </div>
+        <button id="newBtn" class="sidebar-new">＋ New Session</button>
+        <div id="sessionList" class="session-list">
+          <div class="session-empty">No sessions yet. Create one to get started.</div>
+        </div>
+        <div class="sidebar-footer">
+          <button id="refreshSessionsBtn" class="sidebar-button">Refresh List</button>
+        </div>
+        <a href="/" class="sidebar-link">⬅ Control Center</a>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <button id="toggleSidebar" class="icon-button" title="Toggle session navigator">☰</button>
+          <h1>Codex Chat Monitor</h1>
+          <a href="/" class="ghost-button">Control Center</a>
+        </div>
+        <div class="session-toolbar">
+          <input id="sessionName" type="text" placeholder="Add a friendly session name" />
+          <button id="saveNameBtn" class="primary-button">Save Name</button>
+          <button id="refreshBtn" class="ghost-button">Refresh Messages</button>
+          <span id="stats"></span>
+        </div>
+        <div id="chat"></div>
+        <div id="compose">
+          <label for="fromId">From:</label>
+          <input id="fromId" type="text" placeholder="sender id (e.g., brent)" value="brent" />
+          <input id="msgBox" type="text" placeholder="Type a message." />
+          <label>
+            <input id="autoReply" type="checkbox" checked />
+            Ask Codex to reply
+          </label>
+          <label>
+            Last <span id="limitLabel">100</span>
+            <input id="limitRange" type="range" min="10" max="500" step="10" value="100" />
+          </label>
+          <button id="sendBtn">Send</button>
+        </div>
+      </main>
     </div>
     <script>
-      const sel = document.getElementById('sessionSel');
       const chat = document.getElementById('chat');
       const stats = document.getElementById('stats');
       const sessionNameInput = document.getElementById('sessionName');
@@ -104,13 +687,20 @@
       const statusIndicator = document.getElementById('status-indicator');
       const statusText = document.getElementById('status-text');
       const errorNotification = document.getElementById('error-notification');
-      
+      const sessionList = document.getElementById('sessionList');
+      const toggleSidebarBtn = document.getElementById('toggleSidebar');
+      const closeSidebarBtn = document.getElementById('closeSidebar');
+      const newBtn = document.getElementById('newBtn');
+      const refreshSessionsBtn = document.getElementById('refreshSessionsBtn');
+      const refreshBtn = document.getElementById('refreshBtn');
+
       const limitRange = document.getElementById('limitRange');
       const limitLabel = document.getElementById('limitLabel');
+
       let current = null;
       let timer = null;
       let viewLimit = 100;
-      let isAtBottom = true; // track if user is at (or near) bottom
+      let isAtBottom = true;
       let currentErrorTimeout = null;
       let sessionMetadata = {};
       let isEditingName = false;
@@ -158,7 +748,6 @@
 
       function addLoadingMessage(label = 'Codex is thinking') {
         removeLoadingMessage();
-        const messagesDiv = document.getElementById('chat');
         const loadingDiv = document.createElement('div');
         loadingDiv.className = 'row';
         loadingDiv.id = 'loading-row';
@@ -171,8 +760,8 @@
             </div>
           </div>
         `;
-        messagesDiv.appendChild(loadingDiv);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        chat.appendChild(loadingDiv);
+        chat.scrollTop = chat.scrollHeight;
         return loadingDiv;
       }
 
@@ -183,57 +772,124 @@
         }
       }
 
-      async function listSessions() {
+      function highlightSession(sessionId) {
+        sessionList.querySelectorAll('.session-item').forEach(item => {
+          item.classList.toggle('active', sessionId && item.dataset.sessionId === sessionId);
+        });
+      }
+
+      function renderSessionList(sessions) {
+        sessionList.innerHTML = '';
+        if (!sessions.length) {
+          const empty = document.createElement('div');
+          empty.className = 'session-empty';
+          empty.textContent = 'No sessions yet. Create one to get started.';
+          sessionList.appendChild(empty);
+          return;
+        }
+        sessions.forEach(s => {
+          const friendly = (s.display_name && s.display_name.trim()) || `${s.session_id.slice(0, 8)}…`;
+          const item = document.createElement('div');
+          item.className = 'session-item';
+          item.dataset.sessionId = s.session_id;
+          item.setAttribute('role', 'button');
+          item.setAttribute('tabindex', '0');
+          item.innerHTML = `
+            <div class="session-info">
+              <span class="session-name">${friendly}</span>
+              <span class="session-meta">${s.messages} msgs · ${s.token_usage} tok</span>
+            </div>
+            <div class="session-actions">
+              <button type="button" class="session-action copy" title="Copy session ID">📋</button>
+              <button type="button" class="session-action delete" title="Delete session">🗑</button>
+            </div>
+          `;
+          if (s.session_id === current) {
+            item.classList.add('active');
+          }
+          item.addEventListener('click', () => {
+            selectSession(s.session_id);
+            if (window.innerWidth < 900) {
+              document.body.classList.add('sidebar-hidden');
+            }
+          });
+          item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              selectSession(s.session_id);
+              if (window.innerWidth < 900) {
+                document.body.classList.add('sidebar-hidden');
+              }
+            }
+          });
+          const copyButton = item.querySelector('.session-action.copy');
+          const deleteButton = item.querySelector('.session-action.delete');
+          copyButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            copySessionId(s.session_id, copyButton);
+          });
+          deleteButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteSessionById(s.session_id);
+          });
+          sessionList.appendChild(item);
+        });
+      }
+
+      async function listSessions({ suppressErrors = false } = {}) {
         try {
-          const r = await fetch('/sessions');
-          if (!r.ok) {
-            const data = await r.json().catch(() => ({}));
-            showError({
-              title: data.message || 'Unable to load sessions',
-              recovery: data.recovery || 'Refresh and try again',
-              code: data.code || 'LIST_SESSIONS_ERROR'
-            });
+          const response = await fetch('/sessions');
+          if (!response.ok) {
+            if (!suppressErrors) {
+              const data = await response.json().catch(() => ({}));
+              showError({
+                title: data.message || 'Unable to load sessions',
+                recovery: data.recovery || 'Refresh and try again',
+                code: data.code || 'LIST_SESSIONS_ERROR'
+              });
+            }
             return false;
           }
-          const j = await r.json();
-          sel.innerHTML = '';
+          const data = await response.json();
+          const sessions = data.sessions || [];
           sessionMetadata = {};
-          (j.sessions || []).forEach(s => {
-            sessionMetadata[s.session_id] = s;
-            const friendly = (s.display_name && s.display_name.trim()) || `${s.session_id.slice(0,8)}…`;
-            const option = document.createElement('option');
-            option.value = s.session_id;
-            option.textContent = `${friendly} (${s.messages} msgs, ${s.token_usage} tok)`;
-            sel.appendChild(option);
-          });
-          if (current && [...sel.options].some(o => o.value === current)) {
-            sel.value = current;
-          }
-          if (!isEditingName && current && sessionMetadata[current]) {
-            sessionNameInput.value = sessionMetadata[current].display_name || '';
+          sessions.forEach(s => { sessionMetadata[s.session_id] = s; });
+          renderSessionList(sessions);
+          if (current && sessionMetadata[current]) {
+            selectSession(current, { load: false });
+          } else if (sessions.length) {
+            selectSession(sessions[0].session_id, { load: false });
+          } else {
+            selectSession(null, { load: false });
           }
           return true;
         } catch (e) {
           console.error('listSessions failed', e);
-          showError({ title: 'Unable to load sessions', recovery: 'Check connection and retry', code: 'LIST_SESSIONS_ERROR' });
+          if (!suppressErrors) {
+            showError({ title: 'Unable to load sessions', recovery: 'Check connection and retry', code: 'LIST_SESSIONS_ERROR' });
+          }
           return false;
         }
       }
-      function renderMessages(items, preserveScroll=false) {
-        // track scroll state for smart auto-scroll
+
+      function renderMessages(items, preserveScroll = false) {
         const prevScrollTop = chat.scrollTop;
         const prevScrollHeight = chat.scrollHeight;
         chat.innerHTML = '';
         (items || []).forEach(m => {
-          const row = document.createElement('div'); row.className = 'row';
-          const meta = document.createElement('div'); meta.className = 'meta left';
+          const row = document.createElement('div');
+          row.className = 'row';
+          const meta = document.createElement('div');
+          meta.className = 'meta left';
           const speaker = m.ai_id ? m.ai_id : (m.from === 'ai' ? 'codex' : (m.from || 'user'));
           meta.innerHTML = `<strong>${speaker}</strong><span class="timestamp">${formatTimestamp(m.ts || '')}</span>`;
           const type = m.from === 'ai' ? 'ai' : (m.from === 'system' ? 'system' : 'user');
           const bubble = document.createElement('div');
           bubble.className = `msg ${type} left`;
           bubble.textContent = m.content || '';
-          row.appendChild(meta); row.appendChild(bubble); chat.appendChild(row);
+          row.appendChild(meta);
+          row.appendChild(bubble);
+          chat.appendChild(row);
         });
         if (preserveScroll) {
           const delta = chat.scrollHeight - prevScrollHeight;
@@ -241,39 +897,77 @@
         } else {
           chat.scrollTop = chat.scrollHeight;
         }
-        // update bottom flag after render
         isAtBottom = shouldAutoScroll();
       }
 
+      function addMessage(sender, text, type = 'system') {
+        const atBottom = shouldAutoScroll();
+        const row = document.createElement('div');
+        row.className = 'row';
+        const meta = document.createElement('div');
+        meta.className = 'meta left';
+        meta.innerHTML = `<strong>${sender}</strong><span class="timestamp">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
+        const bubble = document.createElement('div');
+        bubble.className = `msg ${type} left`;
+        bubble.textContent = text;
+        row.appendChild(meta);
+        row.appendChild(bubble);
+        chat.appendChild(row);
+        if (atBottom) {
+          chat.scrollTop = chat.scrollHeight;
+        }
+      }
+
       function shouldAutoScroll() {
-        const threshold = 4; // px from bottom (tighter for precision)
+        const threshold = 4;
         return (chat.scrollTop + chat.clientHeight) >= (chat.scrollHeight - threshold);
       }
 
       function formatTimestamp(isoString) {
         if (!isoString) return '';
-        // Normalize ISO microseconds to milliseconds for broad JS Date compatibility
         let s = String(isoString);
-        s = s.replace(/\.(\d{3})\d+(?=[Z+-])/, '.$1'); // trim fractional seconds to 3 digits
+        s = s.replace(/\.(\d{3})\d+(?=[Z+-])/, '.$1');
         const date = new Date(s);
         if (isNaN(date.getTime())) return '';
         const now = new Date();
         const isToday = date.toDateString() === now.toDateString();
         if (isToday) {
           return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        } else {
-          return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+        return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+
+      function selectSession(sessionId, { load = true } = {}) {
+        if (!sessionId) {
+          current = null;
+          highlightSession(null);
+          if (!isEditingName) {
+            sessionNameInput.value = '';
+          }
+          stats.textContent = '';
+          chat.innerHTML = '';
+          return;
+        }
+        current = sessionId;
+        highlightSession(sessionId);
+        const meta = sessionMetadata[sessionId] || {};
+        if (!isEditingName) {
+          sessionNameInput.value = meta.display_name || '';
+        }
+        if (load) {
+          loadSelected();
         }
       }
 
       async function loadSelected() {
-        const id = sel.value; if (!id) return;
-        current = id;
+        if (!current) {
+          return;
+        }
         const atBottom = isAtBottom;
         try {
-          const r = await fetch(`/sessions/${id}/messages?limit=${viewLimit}`);
-          if (!r.ok) {
-            const data = await r.json().catch(() => ({}));
+          const response = await fetch(`/sessions/${current}/messages?limit=${viewLimit}`);
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
             showError({
               title: data.message || 'Failed to load session messages',
               recovery: data.recovery || 'Please refresh and try again',
@@ -281,16 +975,16 @@
             });
             return;
           }
-          const j = await r.json();
+          const data = await response.json();
           if (!isEditingName) {
-            sessionNameInput.value = j.display_name || '';
+            sessionNameInput.value = data.display_name || '';
           }
           if (!sessionMetadata[current]) {
             sessionMetadata[current] = { session_id: current };
           }
-          sessionMetadata[current].display_name = j.display_name || '';
-          renderMessages(j.messages, !atBottom);
-          stats.textContent = `${j.messages.length} msgs · ${j.token_usage} tokens`;
+          sessionMetadata[current].display_name = data.display_name || '';
+          renderMessages(data.messages, !atBottom);
+          stats.textContent = `${data.messages.length} msgs · ${data.token_usage} tokens`;
         } catch (e) {
           console.error('loadSelected failed', e);
           showError({ title: 'Unable to load messages', recovery: 'Check your connection and retry', code: 'LOAD_MESSAGES_ERROR' });
@@ -305,19 +999,22 @@
           if (desiredName) {
             payload.display_name = desiredName;
           }
-          const r = await fetch('/sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-          const data = await r.json();
-          if (!r.ok || !data.session) {
+          const response = await fetch('/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || !data.session) {
             showError({ title: data.message || 'Failed to create session', recovery: data.recovery || 'Try again', code: data.code });
             return;
           }
           current = data.session.session_id;
-          const listed = await listSessions();
+          const listed = await listSessions({ suppressErrors: true });
           if (!listed) {
             updateSystemStatus('warning', 'Session created but list unavailable');
           } else {
-            sel.value = current;
-            await loadSelected();
+            selectSession(current);
           }
           isEditingName = false;
           sessionNameInput.value = data.session.display_name || desiredName || '';
@@ -329,44 +1026,84 @@
         }
       }
 
-      document.getElementById('loadBtn').onclick = loadSelected;
-      document.getElementById('newBtn').onclick = createNew;
-      sel.addEventListener('change', () => {
-        isEditingName = false;
-        const meta = sessionMetadata[sel.value] || {};
-        sessionNameInput.value = meta.display_name || '';
-      });
-      document.getElementById('refreshBtn').onclick = async () => { await listSessions(); await loadSelected(); };
-      document.getElementById('deleteBtn').onclick = async () => {
-        if (!current) {
+      function getSessionDisplayName(sessionId) {
+        const meta = sessionMetadata[sessionId] || {};
+        return (meta.display_name && meta.display_name.trim()) || sessionId;
+      }
+
+      async function deleteSessionById(sessionId) {
+        if (!sessionId) {
           showError({ title: 'No session selected', recovery: 'Pick a session first', code: 'NO_SESSION' });
           return;
         }
-        const confirmed = confirm('Delete this session and all messages?');
+        const confirmed = confirm(`Delete session "${getSessionDisplayName(sessionId)}" and all messages?`);
         if (!confirmed) {
           return;
         }
         updateSystemStatus('warning', 'Deleting session…');
         try {
-          const response = await fetch(`/sessions/${current}`, { method: 'DELETE' });
+          const response = await fetch(`/sessions/${sessionId}`, { method: 'DELETE' });
           if (!response.ok) {
             const data = await response.json().catch(() => ({}));
             showError({ title: data.message || 'Failed to delete session', recovery: data.recovery || 'Try again', code: data.code });
             return;
           }
-          current = null;
-          chat.innerHTML = '';
-          stats.textContent = '';
-          sessionNameInput.value = '';
+          if (current === sessionId) {
+            current = null;
+            chat.innerHTML = '';
+            stats.textContent = '';
+            sessionNameInput.value = '';
+          }
           await listSessions();
+          if (current) {
+            await loadSelected();
+          }
           updateSystemStatus('connected', 'Session deleted');
         } catch (e) {
           console.error('delete session failed', e);
           showError({ title: 'Delete failed', recovery: 'Check connection and retry', code: 'DELETE_SESSION_ERROR' });
         }
-      };
+      }
 
-      saveNameBtn.onclick = async () => {
+      async function copySessionId(sessionId, trigger) {
+        const original = trigger.textContent;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(sessionId);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = sessionId;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          trigger.textContent = '✓';
+        } catch (e) {
+          console.error('Copy failed', e);
+          trigger.textContent = '✕';
+        } finally {
+          setTimeout(() => {
+            trigger.textContent = original;
+          }, 1200);
+        }
+      }
+
+      newBtn.addEventListener('click', createNew);
+
+      refreshSessionsBtn.addEventListener('click', async () => {
+        await listSessions();
+      });
+
+      refreshBtn.addEventListener('click', async () => {
+        await listSessions({ suppressErrors: true });
+        await loadSelected();
+      });
+
+      saveNameBtn.addEventListener('click', async () => {
         if (!current) {
           showError({ title: 'No session selected', recovery: 'Select a session first', code: 'NO_SESSION' });
           return;
@@ -385,7 +1122,6 @@
             return;
           }
           await listSessions();
-          sel.value = current;
           isEditingName = false;
           sessionNameInput.value = data.session?.display_name || desiredName;
           updateSystemStatus('connected', 'Name saved');
@@ -393,51 +1129,40 @@
           console.error('save name failed', e);
           showError({ title: 'Could not save name', recovery: 'Check connection and retry', code: 'SAVE_NAME_ERROR' });
         }
-      };
+      });
 
       sessionNameInput.addEventListener('focus', () => {
         isEditingName = true;
       });
 
       sessionNameInput.addEventListener('blur', () => {
-        // Allow click handlers (e.g., Save) to read the value before toggling the flag
         setTimeout(() => { isEditingName = false; }, 0);
       });
-      document.getElementById('copyIdBtn').onclick = async () => {
-        const btn = document.getElementById('copyIdBtn');
-        if (!current) { btn.textContent = 'No Session'; setTimeout(()=>btn.textContent='Copy SysID', 1000); return; }
-        const text = current;
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(text);
-          } else {
-            const ta = document.createElement('textarea');
-            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-            document.body.appendChild(ta); ta.focus(); ta.select();
-            document.execCommand('copy'); document.body.removeChild(ta);
-          }
-          btn.textContent = 'Copied'; setTimeout(()=>btn.textContent='Copy SysID', 1200);
-        } catch (e) {
-          console.error('Copy failed', e);
-          btn.textContent = 'Copy Failed'; setTimeout(()=>btn.textContent='Copy SysID', 1400);
-        }
-      };
 
       limitRange.addEventListener('input', () => {
         viewLimit = parseInt(limitRange.value, 10) || 100;
         limitLabel.textContent = String(viewLimit);
       });
-      limitRange.addEventListener('change', loadSelected);
+
+      limitRange.addEventListener('change', () => {
+        loadSelected();
+      });
 
       async function sendMessage() {
-        if (!current) { await createNew(); }
+        if (!current) {
+          await createNew();
+        }
+        if (!current) {
+          return;
+        }
         const fromId = document.getElementById('fromId').value.trim() || 'brent';
         const box = document.getElementById('msgBox');
         const auto = document.getElementById('autoReply').checked;
         const text = box.value.trim();
         if (!text) return;
         const btn = document.getElementById('sendBtn');
-        btn.disabled = true; btn.textContent = 'Sending…';
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
         const addedLoading = auto ? addLoadingMessage() : null;
         updateSystemStatus('warning', 'Sending message…');
         try {
@@ -475,19 +1200,20 @@
           showError({ title: 'Connection failed', recovery: 'Check your connection and retry', code: 'NETWORK_ERROR' });
           addMessage('System', 'Connection error - please try again', 'error');
         } finally {
-          btn.disabled = false; btn.textContent = 'Send';
+          btn.disabled = false;
+          btn.textContent = 'Send';
           if (addedLoading) {
             removeLoadingMessage();
           }
         }
       }
 
-      document.getElementById('sendBtn').onclick = sendMessage;
+      document.getElementById('sendBtn').addEventListener('click', sendMessage);
+
       document.getElementById('msgBox').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
       });
 
-      // Track user scroll position to decide auto-scroll behavior
       chat.addEventListener('scroll', () => {
         isAtBottom = shouldAutoScroll();
       });
@@ -505,10 +1231,30 @@
         }
       }
 
+      toggleSidebarBtn?.addEventListener('click', () => {
+        document.body.classList.toggle('sidebar-hidden');
+      });
+
+      closeSidebarBtn?.addEventListener('click', () => {
+        document.body.classList.add('sidebar-hidden');
+      });
+
+      window.addEventListener('resize', () => {
+        if (window.innerWidth >= 900) {
+          document.body.classList.remove('sidebar-hidden');
+        }
+      });
+
+      if (window.innerWidth < 900) {
+        document.body.classList.add('sidebar-hidden');
+      }
+
       (async () => {
         updateSystemStatus('warning', 'Loading sessions…');
-        await listSessions();
-        if (sel.options.length) { sel.selectedIndex = 0; current = sel.value; await loadSelected(); }
+        const listed = await listSessions();
+        if (listed && current) {
+          await loadSelected();
+        }
         timer = setInterval(loadSelected, 3000);
         setInterval(checkSystemHealth, 30000);
         await checkSystemHealth();
@@ -516,4 +1262,4 @@
       })();
     </script>
   </body>
-  </html>
+</html>

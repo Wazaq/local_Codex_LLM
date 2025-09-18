@@ -9,7 +9,7 @@ from logging.handlers import TimedRotatingFileHandler
 from flask import Flask, jsonify, request
 
 import config
-from core.metrics import PrometheusMetrics
+from core.metrics import PrometheusMetrics, make_metrics_collector
 from core.mcp_client import HTTPMCPClient
 from core.session_store import make_session_store
 from core import security as sec
@@ -20,6 +20,8 @@ from routes.sessions import sessions_bp
 from routes.ail import ail_bp
 from routes.ui import ui_bp
 from routes.health import health_bp
+from routes.admin import admin_bp
+from core.middleware import setup_metrics_middleware
 from mcp.server import CodexMCPServer
 
 
@@ -32,6 +34,7 @@ def create_app():
     # Initialize core components
     metrics = PrometheusMetrics()
     metrics.set_gauge('codex_streaming_active', {}, 0)
+    dashboard_metrics = make_metrics_collector()
     ail_client = HTTPMCPClient(config.MCP_URL)
     sessions = make_session_store()
 
@@ -60,6 +63,7 @@ def create_app():
 
     # Dependency injection into app config for route access
     app.config['metrics'] = metrics
+    app.config['dashboard_metrics'] = dashboard_metrics
     app.config['ail_client'] = ail_client
     app.config['sessions'] = sessions
     app.config['app_logger'] = app_logger
@@ -80,6 +84,7 @@ def create_app():
     app.register_blueprint(ail_bp)
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
+    app.register_blueprint(admin_bp)
 
     # MCP server integration (used by legacy /mcp route in routes.ail)
     app.config['mcp_server'] = CodexMCPServer(app)
@@ -100,6 +105,8 @@ def create_app():
         def shutdown_now():
             _handle_sigterm(None, None, app)
             return jsonify({"status": "shutting_down", "timeout": config.SHUTDOWN_TIMEOUT})
+
+    setup_metrics_middleware(app)
 
     return app
 

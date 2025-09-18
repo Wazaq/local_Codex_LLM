@@ -33,7 +33,7 @@ class Session:
             "ttl_seconds": self.ttl_seconds,
             "token_usage": self.token_usage,
             "summary_len": len(self.summary or ""),
-            "display_name": self.display_name,
+            "display_name": getattr(self, 'display_name', None),
             "messages": (self.messages if include_messages else None)
         }
         if not include_messages:
@@ -51,7 +51,7 @@ class Session:
             "summary": self.summary or "",
             "token_usage": int(self.token_usage),
             "last_updated": float(self.last_updated),
-            "display_name": self.display_name,
+            "display_name": getattr(self, 'display_name', None),
         }
 
     @staticmethod
@@ -89,7 +89,10 @@ class SessionStore:
 
     def get(self, session_id):
         with self._lock:
-            return self._sessions.get(session_id)
+            session = self._sessions.get(session_id)
+            if session is not None and not hasattr(session, 'display_name'):
+                session.display_name = None
+            return session
 
     def delete(self, session_id):
         with self._lock:
@@ -200,7 +203,10 @@ class FileSessionStore:
 
     def get(self, session_id):
         with self._lock:
-            return self._sessions.get(session_id)
+            session = self._sessions.get(session_id)
+            if session is not None and not hasattr(session, 'display_name'):
+                session.display_name = None
+            return session
 
     def delete(self, session_id):
         with self._lock:

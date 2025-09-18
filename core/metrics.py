@@ -1,4 +1,7 @@
 import threading
+from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
+from typing import Any, Deque, Dict, List, Optional
 
 
 class PrometheusMetrics:
@@ -66,3 +69,139 @@ class PrometheusMetrics:
                     lines.append(f"{name}_count{label_str_base} {h['count'].get(labels_key, 0)}")
         return "\n".join(lines) + "\n"
 
+
+class MetricsCollector:
+    """Collect in-memory health metrics for the admin dashboard."""
+
+    def __init__(self, max_history_size: int = 1000):
+        self.max_history_size = max_history_size
+        self.lock = threading.RLock()
+
+        # Metric primitives
+        self.counters: Dict[str, int] = defaultdict(int)
+        self.gauges: Dict[str, float] = defaultdict(float)
+
+        # Time-series history
+        self.request_history: Deque[Dict[str, Any]] = deque(maxlen=max_history_size)
+        self.error_history: Deque[Dict[str, Any]] = deque(maxlen=max_history_size)
+        self.session_history: Deque[Dict[str, Any]] = deque(maxlen=max_history_size)
+        self.response_times: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=100))
+
+        self.start_time = datetime.now(timezone.utc)
+
+    def increment_counter(self, name: str, value: int = 1, labels: Optional[Dict[str, str]] = None) -> None:
+        with self.lock:
+            key = self._make_key(name, labels)
+            self.counters[key] += value
+
+    def set_gauge(self, name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        with self.lock:
+            key = self._make_key(name, labels)
+            self.gauges[key] = value
+
+    def record_request(self, endpoint: str, method: str, status_code: int, duration: float) -> None:
+        timestamp = self._now_iso()
+        with self.lock:
+            entry = {
+                "timestamp": timestamp,
+                "endpoint": endpoint,
+                "method": method,
+                "status_code": status_code,
+                "duration_ms": round(duration * 1000, 3),
+                "success": status_code < 400,
+            }
+            self.request_history.append(entry)
+
+            key = self._make_key("http_requests_total", {
+                "endpoint": endpoint,
+                "method": method,
+                "status": str(status_code),
+            })
+            self.counters[key] += 1
+
+            self.response_times[endpoint].append(duration)
+
+    def record_error(self, error_code: str, endpoint: str, message: str) -> None:
+        timestamp = self._now_iso()
+        with self.lock:
+            entry = {
+                "timestamp": timestamp,
+                "error_code": error_code,
+                "endpoint": endpoint,
+                "message": message,
+            }
+            self.error_history.append(entry)
+
+            key = self._make_key("errors_total", {
+                "error_code": error_code,
+                "endpoint": endpoint,
+            })
+            self.counters[key] += 1
+
+    def record_session_event(self, event_type: str, session_id: str, details: Optional[Dict[str, Any]] = None) -> None:
+        timestamp = self._now_iso()
+        with self.lock:
+            entry = {
+                "timestamp": timestamp,
+                "event_type": event_type,
+                "session_id": session_id,
+                "details": details or {},
+            }
+            self.session_history.append(entry)
+
+            key = self._make_key("session_events_total", {"event_type": event_type})
+            self.counters[key] += 1
+
+    def get_summary(self) -> Dict[str, Any]:
+        with self.lock:
+            uptime = datetime.now(timezone.utc) - self.start_time
+            recent_requests = list(self.request_history)[-100:]
+            errors = sum(1 for r in recent_requests if not r.get("success"))
+            error_rate = (errors / len(recent_requests)) if recent_requests else 0.0
+
+            avg_response_times: Dict[str, float] = {}
+            for endpoint, durations in self.response_times.items():
+                if durations:
+                    avg_response_times[endpoint] = sum(durations) / len(durations)
+
+            return {
+                "uptime_seconds": uptime.total_seconds(),
+                "uptime_formatted": str(uptime).split(".")[0],
+                "total_requests": len(self.request_history),
+                "total_errors": len(self.error_history),
+                "error_rate_percent": round(error_rate * 100, 2),
+                "average_response_times": avg_response_times,
+                "active_counters": dict(self.counters),
+                "current_gauges": dict(self.gauges),
+            }
+
+    def get_time_series_data(self, hours_back: int = 24) -> Dict[str, List[Dict[str, Any]]]:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(hours_back, 0))
+        with self.lock:
+            requests = [r for r in self.request_history if self._parse_iso(r["timestamp"]) >= cutoff]
+            errors = [e for e in self.error_history if self._parse_iso(e["timestamp"]) >= cutoff]
+            sessions = [s for s in self.session_history if self._parse_iso(s["timestamp"]) >= cutoff]
+
+        return {
+            "requests": requests,
+            "errors": errors,
+            "sessions": sessions,
+        }
+
+    def _make_key(self, name: str, labels: Optional[Dict[str, str]] = None) -> str:
+        if not labels:
+            return name
+        label_str = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
+        return f"{name}{{{label_str}}}"
+
+    @staticmethod
+    def _parse_iso(timestamp: str) -> datetime:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def make_metrics_collector(max_history_size: int = 1000) -> MetricsCollector:
+    return MetricsCollector(max_history_size=max_history_size)

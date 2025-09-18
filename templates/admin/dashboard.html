@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Codex Bridge Admin Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #f7fafc;
+            --card-bg: #ffffff;
+            --border: #e2e8f0;
+            --text: #2d3748;
+            --muted: #718096;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .header {
+            background: linear-gradient(120deg, #667eea, #764ba2);
+            color: white;
+            padding: 2.5rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 2rem;
+        }
+
+        .header .subtitle {
+            opacity: 0.85;
+        }
+
+        .back-link {
+            align-self: flex-start;
+            margin-bottom: 0.75rem;
+        }
+
+        .back-link a {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.4rem 0.9rem;
+            border-radius: 999px;
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background-color 0.2s ease, transform 0.2s ease;
+        }
+
+        .back-link a:hover {
+            background-color: rgba(255, 255, 255, 0.32);
+            transform: translateY(-1px);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: -2rem auto 3rem;
+            padding: 0 1.5rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 14px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+        }
+
+        .card h3 {
+            font-size: 1.05rem;
+            margin: 0 0 1rem;
+            color: #1a202c;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-healthy { background-color: #48bb78; }
+        .status-degraded { background-color: #ed8936; }
+        .status-unhealthy { background-color: #f56565; }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #edf2f7;
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .metric-value {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .metric-value.large {
+            font-size: 1.45rem;
+            color: #2d3748;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem 0;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .error {
+            background-color: #fed7d7;
+            color: #c53030;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            border: 1px solid rgba(203, 213, 225, 0.6);
+        }
+
+        .sessions-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        .sessions-table th,
+        .sessions-table td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 0.9rem;
+        }
+
+        .sessions-table th {
+            background-color: #f7fafc;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .session-id {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.8rem;
+            background-color: #edf2f7;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .ai-badges {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+        }
+
+        .ai-badge {
+            background-color: #667eea;
+            color: white;
+            padding: 0.125rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+        }
+
+        .refresh-row {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .refresh-button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            box-shadow: 0 8px 18px rgba(76, 110, 245, 0.25);
+        }
+
+        .refresh-button:hover {
+            background: #5a67d8;
+        }
+
+        .auto-refresh {
+            color: var(--muted);
+            font-size: 0.8rem;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 1rem 3rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .refresh-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="back-link"><a href="/">⬅ Control Center</a></div>
+        <h1>🏥 Codex Bridge Admin Dashboard</h1>
+        <div class="subtitle">Live system health, sessions, and error monitoring</div>
+    </div>
+
+    <div class="container">
+        <div class="refresh-row">
+            <button class="refresh-button" onclick="refreshData()">🔄 Refresh</button>
+            <span class="auto-refresh">Auto-refreshes every 30 seconds</span>
+        </div>
+
+        <div id="error-container"></div>
+
+        <div class="grid">
+            <div class="card">
+                <h3><span id="health-indicator" class="status-indicator"></span>System Health</h3>
+                <div id="health-metrics"><div class="loading">Loading system health…</div></div>
+            </div>
+
+            <div class="card">
+                <h3>📊 Request Metrics</h3>
+                <div id="request-metrics"><div class="loading">Loading request metrics…</div></div>
+            </div>
+
+            <div class="card">
+                <h3>💬 Session Overview</h3>
+                <div id="session-metrics"><div class="loading">Loading session data…</div></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>📋 Active Sessions</h3>
+            <div id="sessions-container"><div class="loading">Loading sessions…</div></div>
+        </div>
+
+        <div class="card">
+            <h3>⚠️ Recent Errors</h3>
+            <div id="errors-container"><div class="loading">Loading errors…</div></div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval;
+
+        async function fetchData(url) {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        }
+
+        async function refreshData() {
+            clearError();
+            try {
+                await Promise.all([
+                    loadHealthData(),
+                    loadSessionsData(),
+                    loadErrorsData()
+                ]);
+            } catch (error) {
+                showError(`Failed to refresh dashboard data: ${error.message}`);
+            }
+        }
+
+        async function loadHealthData() {
+            const data = await fetchData('/admin/api/health');
+            const indicator = document.getElementById('health-indicator');
+            indicator.className = `status-indicator status-${data.status}`;
+
+            const healthHtml = `
+                <div class="metric">
+                    <span class="metric-label">Status</span>
+                    <span class="metric-value">${data.status.toUpperCase()}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Uptime</span>
+                    <span class="metric-value">${data.uptime}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Total Requests</span>
+                    <span class="metric-value large">${data.metrics.total_requests}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Total Errors</span>
+                    <span class="metric-value">${data.metrics.total_errors}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Error Rate</span>
+                    <span class="metric-value">${data.metrics.error_rate_percent}%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Response Time</span>
+                    <span class="metric-value">${data.metrics.average_response_time_ms} ms</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Storage</span>
+                    <span class="metric-value">${data.system.storage || 'n/a'}</span>
+                </div>
+            `;
+            document.getElementById('health-metrics').innerHTML = healthHtml;
+
+            const requestMetricsHtml = `
+                <div class="metric">
+                    <span class="metric-label">Tracked Endpoints</span>
+                    <span class="metric-value">${Object.keys(data.metrics.average_response_times || {}).length}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Counters Recorded</span>
+                    <span class="metric-value">${data.metrics.counter_count}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Last Updated</span>
+                    <span class="metric-value">${new Date(data.timestamp).toLocaleString()}</span>
+                </div>
+            `;
+            document.getElementById('request-metrics').innerHTML = requestMetricsHtml;
+
+            const sessionHtml = `
+                <div class="metric">
+                    <span class="metric-label">Total Sessions</span>
+                    <span class="metric-value large">${data.sessions.total}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Active (1h)</span>
+                    <span class="metric-value">${data.sessions.active}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Total Messages</span>
+                    <span class="metric-value">${data.sessions.total_messages}</span>
+                </div>
+            `;
+            document.getElementById('session-metrics').innerHTML = sessionHtml;
+        }
+
+        async function loadSessionsData() {
+            const data = await fetchData('/admin/api/sessions');
+            if (!data.sessions.length) {
+                document.getElementById('sessions-container').innerHTML = '<p>No active sessions</p>';
+                return;
+            }
+
+            const rows = data.sessions.slice(0, 10).map(session => `
+                <tr>
+                    <td><span class="session-id">${session.session_id}</span></td>
+                    <td>
+                        <div class="ai-badges">
+                            ${session.ai_ids.map(ai => `<span class="ai-badge">${ai}</span>`).join('') || '<span class="ai-badge">n/a</span>'}
+                        </div>
+                    </td>
+                    <td>${session.message_count}</td>
+                    <td>${session.token_usage}</td>
+                    <td>${session.last_activity ? new Date(session.last_activity).toLocaleString() : '–'}</td>
+                    <td>${session.created_at ? new Date(session.created_at).toLocaleString() : '–'}</td>
+                </tr>
+            `).join('');
+
+            const sessionsHtml = `
+                <table class="sessions-table">
+                    <thead>
+                        <tr>
+                            <th>Session</th>
+                            <th>AI IDs</th>
+                            <th>Messages</th>
+                            <th>Tokens</th>
+                            <th>Last Activity</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                ${data.sessions.length > 10 ? `<p style="margin-top: 1rem; color: var(--muted); font-size: 0.9rem;">Showing 10 of ${data.sessions.length} sessions</p>` : ''}
+            `;
+            document.getElementById('sessions-container').innerHTML = sessionsHtml;
+        }
+
+        async function loadErrorsData() {
+            const data = await fetchData('/admin/api/errors');
+            if (!data.total_errors) {
+                document.getElementById('errors-container').innerHTML = '<p>No recent errors 🎉</p>';
+                return;
+            }
+
+            const items = Object.entries(data.error_groups).map(([code, details]) => `
+                <div class="metric">
+                    <div>
+                        <div style="font-weight: 600;">${code}</div>
+                        <div style="font-size: 0.8rem; color: var(--muted);">${details.latest_message}</div>
+                    </div>
+                    <div class="metric-value">${details.count}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('errors-container').innerHTML = items || '<p>No recent errors 🎉</p>';
+        }
+
+        function showError(message) {
+            document.getElementById('error-container').innerHTML = `<div class="error">${message}</div>`;
+        }
+
+        function clearError() {
+            document.getElementById('error-container').innerHTML = '';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshData();
+            refreshInterval = setInterval(refreshData, 30000);
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>
